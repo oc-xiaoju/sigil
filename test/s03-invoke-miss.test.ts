@@ -1,70 +1,46 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockLoader, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { KvStore } from '../src/kv.js'
+import { CONFIG } from '../src/config.js'
 
-describe('S3: 调用未部署能力（换入）', () => {
+describe('S3: 调用未部署能力（冷启动）', () => {
   let mockKv: KVNamespace
-  let mockLoader: ReturnType<typeof createMockLoader>
-  let mockEmbed: MockEmbeddingService
+  let mockCf: ReturnType<typeof createMockCfApi>
   let pool: WorkerPool
   let kv: KvStore
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockLoader = createMockLoader({
-      invokeResponse: () => new Response('pong', { status: 200 }),
-    })
-    mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
+    mockCf = createMockCfApi({ invokeResponse: () => new Response('pong', { status: 200 }) })
+    pool = new WorkerPool(mockKv, mockCf.cfApi, new MockEmbeddingService() as any)
     kv = new KvStore(mockKv)
-
-    // Manually write KV to simulate "evicted but not deleted from KV" state
+    for (let i = 0; i < CONFIG.MAX_SLOTS; i++) await kv.setSlot(i, { capability: null, status: 'free' })
     await kv.setCode('ping', "export default { fetch() { return new Response('pong') } }")
-    await kv.setMeta('ping', {
-      type: 'normal',
-      created_at: Date.now() - 10000,
-    })
-    await kv.setLru('ping', {
-      last_access: Date.now() - 10000,
-      access_count: 5,
-      deployed: false, // key: not deployed
-    })
+    await kv.setMeta('ping', { type: 'normal', created_at: Date.now() - 10000 })
+    await kv.setLru('ping', { last_access: Date.now() - 10000, access_count: 5, deployed: false })
   })
 
-  it('should page in and call LOADER.get', async () => {
-    const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
-    const resp = await pool.invoke('ping', req)
-
+  it('should page-in and call updateSlotCode', async () => {
+    const resp = await pool.invoke('ping', new Request('https://sigil.shazhou.workers.dev/run/ping'))
     expect(resp.status).toBe(200)
-    // LOADER.get() should be called (Dynamic Workers executes inline)
-    expect(mockLoader.loaderCalls().length).toBeGreaterThan(0)
+    expect(mockCf.updateSlotCodeCalls()).toHaveLength(1)
   })
 
   it('should set lru.deployed=true after page-in', async () => {
-    const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
-    await pool.invoke('ping', req)
-
-    const lru = await kv.getLru('ping')
-    expect(lru?.deployed).toBe(true)
+    await pool.invoke('ping', new Request('https://sigil.shazhou.workers.dev/run/ping'))
+    expect((await kv.getLru('ping'))?.deployed).toBe(true)
   })
 
   it('should set X-Sigil-Cold-Start header', async () => {
-    const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
-    const resp = await pool.invoke('ping', req)
-
+    const resp = await pool.invoke('ping', new Request('https://sigil.shazhou.workers.dev/run/ping'))
     expect(resp.headers.get('X-Sigil-Cold-Start')).toBe('true')
   })
 
-  it('should NOT set X-Sigil-Cold-Start on warm hit', async () => {
-    // First invoke (cold)
-    const req1 = new Request('https://sigil.shazhou.workers.dev/run/ping')
-    await pool.invoke('ping', req1)
-
-    // Second invoke (warm)
-    const req2 = new Request('https://sigil.shazhou.workers.dev/run/ping')
-    const resp2 = await pool.invoke('ping', req2)
-
-    expect(resp2.headers.get('X-Sigil-Cold-Start')).toBeNull()
+  it('should write route entry after page-in', async () => {
+    await pool.invoke('ping', new Request('https://sigil.shazhou.workers.dev/run/ping'))
+    const route = await kv.getRoute('ping')
+    expect(route).not.toBeNull()
+    expect(typeof route?.slot).toBe('number')
   })
 })

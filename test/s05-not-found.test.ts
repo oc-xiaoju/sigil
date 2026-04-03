@@ -1,36 +1,34 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockLoader, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 
-describe('S5: 调用不存在的能力', () => {
-  let mockKv: KVNamespace
-  let mockLoader: ReturnType<typeof createMockLoader>
-  let mockEmbed: MockEmbeddingService
+describe('S5: 调用不存在能力', () => {
   let pool: WorkerPool
+  let mockCf: ReturnType<typeof createMockCfApi>
 
   beforeEach(() => {
-    mockKv = createMockKv()
-    mockLoader = createMockLoader()
-    mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
+    const mockKv = createMockKv()
+    mockCf = createMockCfApi()
+    pool = new WorkerPool(mockKv, mockCf.cfApi, new MockEmbeddingService() as any)
   })
 
-  it('should return 404 for nonexistent capability', async () => {
-    const req = new Request('https://sigil.shazhou.workers.dev/run/nonexistent')
-    const resp = await pool.invoke('nonexistent', req)
+  it('should return 404', async () => {
+    const resp = await pool.invoke('nonexistent', new Request('https://sigil.shazhou.workers.dev/run/nonexistent'))
     expect(resp.status).toBe(404)
   })
 
   it('should return error JSON body', async () => {
-    const req = new Request('https://sigil.shazhou.workers.dev/run/nonexistent')
-    const resp = await pool.invoke('nonexistent', req)
-    const body = await resp.json() as { error: string }
-    expect(body.error).toBeTruthy()
+    const resp = await pool.invoke('nonexistent', new Request('https://sigil.shazhou.workers.dev/run/nonexistent'))
+    expect((await resp.json() as any).error).toBeTruthy()
   })
 
-  it('should not call LOADER.get for nonexistent capability', async () => {
-    const req = new Request('https://sigil.shazhou.workers.dev/run/nonexistent')
-    await pool.invoke('nonexistent', req)
-    expect(mockLoader.loaderCalls()).toHaveLength(0)
+  it('should not call cfApi.invoke', async () => {
+    await pool.invoke('nonexistent', new Request('https://sigil.shazhou.workers.dev/run/nonexistent'))
+    expect(mockCf.invokeCalls()).toHaveLength(0)
+  })
+
+  it('should not call cfApi.updateSlotCode', async () => {
+    await pool.invoke('nonexistent', new Request('https://sigil.shazhou.workers.dev/run/nonexistent'))
+    expect(mockCf.updateSlotCodeCalls()).toHaveLength(0)
   })
 })

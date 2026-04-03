@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockLoader, makeRequest, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockCfApi, makeRequest, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { AuthModule } from '../src/auth.js'
 import { KvStore } from '../src/kv.js'
@@ -7,7 +7,7 @@ import { handleRequest } from '../src/router.js'
 
 describe('Query API', () => {
   let mockKv: KVNamespace
-  let mockLoader: ReturnType<typeof createMockLoader>
+  let mockCf: ReturnType<typeof createMockCfApi>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let auth: AuthModule
@@ -15,13 +15,14 @@ describe('Query API', () => {
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockLoader = createMockLoader()
+    mockCf = createMockCfApi()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 
     await auth.setToken('deploy-token')
+    for (let __qi = 0; __qi < 3; __qi++) await kv.setSlot(__qi, { capability: null, status: "free" })
 
     // Deploy capabilities with metadata
     await pool.deploy({
@@ -111,11 +112,12 @@ describe('Query API', () => {
 
     // Re-deploy with the new overrides in place
     const mockKv2 = createMockKv()
-    const mockLoader2 = createMockLoader()
-    const pool2 = new WorkerPool(mockKv2, mockLoader2.loader, mockEmbed as any)
+    const mockCf2 = createMockCfApi()
+    const pool2 = new WorkerPool(mockKv2, mockCf2.cfApi, mockEmbed as any)
     const kv2 = new KvStore(mockKv2)
     const auth2 = new AuthModule(kv2)
     await auth2.setToken('deploy-token')
+    for (let __qj = 0; __qj < 3; __qj++) await kv2.setSlot(__qj, { capability: null, status: "free" })
 
     await pool2.deploy({
       name: 'currency',
@@ -176,7 +178,7 @@ describe('Query API', () => {
         return mockEmbed.embedQuery(q)
       },
     }
-    const pool2 = new WorkerPool(mockKv, mockLoader.loader, trackingEmbed as any)
+    const pool2 = new WorkerPool(mockKv, mockCf.cfApi, trackingEmbed as any)
     const result = await pool2.query({})
     expect(embedCalled).toBe(false)
     expect(result.total).toBe(3)
