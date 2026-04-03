@@ -15,6 +15,7 @@ export interface DeployParams {
   description?: string      // 一句话描述
   tags?: string[]           // 标签
   examples?: string[]       // 用法示例
+  requires?: string[]       // AMD 风格依赖
 }
 
 export interface DeployResult {

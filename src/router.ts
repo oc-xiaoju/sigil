@@ -74,6 +74,7 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
       description?: string
       tags?: string[]
       examples?: string[]
+      requires?: string[]
     }
 
     // Route validation
@@ -110,6 +111,7 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
       description: body.description,
       tags: body.tags,
       examples: body.examples,
+      requires: body.requires,
     })
 
     // Set cooldown after successful deploy

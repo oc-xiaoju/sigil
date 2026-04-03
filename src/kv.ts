@@ -15,6 +15,7 @@ export interface KvMetaValue {
   tags?: string[]
   examples?: string[]
   schema?: InputSchema
+  requires?: string[]
 }
 
 export interface KvLruValue {
