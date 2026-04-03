@@ -5,7 +5,7 @@ import { AuthModule } from '../src/auth.js'
 import { KvStore } from '../src/kv.js'
 import { handleRequest } from '../src/router.js'
 
-describe('S7: 列出能力', () => {
+describe('S7: 列出能力（已迁移至 query 接口）', () => {
   let mockKv: KVNamespace
   let mockCf: ReturnType<typeof createMockCfApi>
   let pool: WorkerPool
@@ -31,29 +31,37 @@ describe('S7: 列出能力', () => {
     }
   })
 
-  it('should return all capabilities', async () => {
+  it('/_api/list should return 404 (removed)', async () => {
     const req = makeRequest('GET', '/_api/list', {
       token: 'deploy-token',
     })
 
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+    expect(resp.status).toBe(404)
+  })
+
+  it('/_api/query should return all capabilities (explore mode)', async () => {
+    const req = makeRequest('GET', '/_api/query')
+
+    const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     expect(resp.status).toBe(200)
 
-    const body = await resp.json() as { capabilities: Array<{ capability: string }> }
-    expect(body.capabilities).toHaveLength(3)
+    const body = await resp.json() as { total: number; items: Array<{ capability: string }> }
+    expect(body.total).toBe(3)
+    expect(body.items).toHaveLength(3)
 
-    const names = body.capabilities.map(c => c.capability)
+    const names = body.items.map((c: { capability: string }) => c.capability)
     expect(names).toContain('ping')
     expect(names).toContain('echo')
     expect(names).toContain('hello')
   })
 
-  it('should include capability metadata in response', async () => {
-    const caps = await pool.list()
-    expect(caps.length).toBe(3)
-    for (const cap of caps) {
-      expect(cap.type).toBe('normal')
-      expect(cap.deployed).toBe(true)
+  it('should include capability metadata in query results', async () => {
+    const result = await pool.query({})
+    expect(result.total).toBe(3)
+    for (const item of result.items) {
+      expect(item.type).toBe('normal')
+      expect(item.score).toBeGreaterThan(0)
     }
   })
 })

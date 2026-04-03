@@ -9,6 +9,9 @@ export interface KvMetaValue {
   ttl?: number
   created_at: number
   bindings?: string[]
+  description?: string
+  tags?: string[]
+  examples?: string[]
 }
 
 export interface KvLruValue {

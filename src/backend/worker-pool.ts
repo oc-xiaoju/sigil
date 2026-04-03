@@ -1,7 +1,8 @@
-import type { SigilBackend, DeployParams, DeployResult, Capability, BackendStatus } from './types.js'
+import type { SigilBackend, DeployParams, DeployResult, Capability, BackendStatus, QueryParams, QueryResult, QueryItem } from './types.js'
 import { KvStore } from '../kv.js'
 import { LruScheduler, PageRateLimitError } from '../lru.js'
 import { CONFIG } from '../config.js'
+import { scoreCapability, applyExploreDedup } from '../scoring.js'
 
 export interface CfApi {
   deployWorker(name: string, code: string): Promise<void>
@@ -40,7 +41,7 @@ export class WorkerPool implements SigilBackend {
   }
 
   async deploy(params: DeployParams): Promise<DeployResult> {
-    const { name, code, type, ttl, bindings } = params
+    const { name, code, type, ttl, bindings, description, tags, examples } = params
 
     // Determine capability name
     let capability: string
@@ -90,6 +91,9 @@ export class WorkerPool implements SigilBackend {
       ttl,
       created_at: now,
       bindings,
+      description,
+      tags,
+      examples,
     })
     await this.kv.setLru(capability, {
       last_access: now,
@@ -284,9 +288,17 @@ export class WorkerPool implements SigilBackend {
     await this.kv.deleteRoute(capabilityName)
   }
 
-  async list(): Promise<Capability[]> {
+  async query(params: QueryParams): Promise<QueryResult> {
+    const { q, mode: rawMode, limit: rawLimit, cursor } = params
+
+    // Determine effective mode
+    const mode = rawMode ?? (q ? 'find' : 'explore')
+    const defaultLimit = mode === 'find' ? 3 : 20
+    const limit = rawLimit ?? defaultLimit
+
+    // Fetch all capabilities
     const caps = await this.kv.listCapabilities()
-    const result: Capability[] = []
+    const allCapabilities: Capability[] = []
 
     for (const cap of caps) {
       const meta = await this.kv.getMeta(cap)
@@ -300,6 +312,9 @@ export class WorkerPool implements SigilBackend {
         last_access: lru.last_access,
         access_count: lru.access_count,
         created_at: meta.created_at,
+        description: meta.description,
+        tags: meta.tags,
+        examples: meta.examples,
       }
 
       if (meta.ttl !== undefined) {
@@ -307,10 +322,70 @@ export class WorkerPool implements SigilBackend {
         capability.expires_at = new Date(meta.created_at + meta.ttl * 1000).toISOString()
       }
 
-      result.push(capability)
+      allCapabilities.push(capability)
     }
 
-    return result
+    // If mode=find but no q → treat as explore
+    const effectiveMode = (mode === 'find' && !q) ? 'explore' : mode
+
+    let items: QueryItem[]
+
+    if (!q) {
+      // No query — explore mode: sort by created_at descending, return summaries
+      const sorted = [...allCapabilities].sort((a, b) => b.created_at - a.created_at)
+      items = sorted.map(cap => ({
+        capability: cap.capability,
+        description: cap.description,
+        type: cap.type,
+        score: 1.0,
+      }))
+    } else {
+      // Score and filter
+      const scored = allCapabilities
+        .map(cap => ({ cap, score: scoreCapability(cap, q) }))
+        .filter(({ score }) => score > 0)
+        .sort((a, b) => b.score - a.score)
+
+      if (effectiveMode === 'find') {
+        items = scored.map(({ cap, score }) => ({
+          capability: cap.capability,
+          description: cap.description,
+          tags: cap.tags,
+          examples: cap.examples,
+          type: cap.type,
+          deployed: cap.deployed,
+          access_count: cap.access_count,
+          score,
+        }))
+      } else {
+        // explore: build summary items then apply dedup
+        const summaryItems: QueryItem[] = scored.map(({ cap, score }) => ({
+          capability: cap.capability,
+          description: cap.description,
+          tags: cap.tags,   // keep tags for dedup logic, stripped later
+          type: cap.type,
+          score,
+        }))
+
+        const deduped = applyExploreDedup(summaryItems)
+          .sort((a, b) => b.score - a.score)
+
+        // Strip tags/examples from explore output (only capability/description/type/score)
+        items = deduped.map(({ capability, description, type, score }) => ({
+          capability,
+          description,
+          type,
+          score,
+        }))
+      }
+    }
+
+    // Apply cursor (offset-based paging)
+    const offset = cursor ? parseInt(cursor, 10) : 0
+    const total = items.length
+    const paged = items.slice(offset, offset + limit)
+
+    return { total, items: paged }
   }
 
   async inspect(capabilityName: string): Promise<Capability | null> {

@@ -4,6 +4,9 @@ export interface DeployParams {
   type: 'persistent' | 'normal' | 'ephemeral'
   ttl?: number              // 秒，仅 ephemeral
   bindings?: string[]
+  description?: string      // 一句话描述
+  tags?: string[]           // 标签
+  examples?: string[]       // 用法示例
 }
 
 export interface DeployResult {
@@ -23,6 +26,32 @@ export interface Capability {
   created_at: number
   ttl?: number
   expires_at?: string
+  description?: string
+  tags?: string[]
+  examples?: string[]
+}
+
+export interface QueryParams {
+  q?: string
+  mode?: 'find' | 'explore'
+  limit?: number
+  cursor?: string
+}
+
+export interface QueryItem {
+  capability: string
+  description?: string
+  tags?: string[]
+  examples?: string[]
+  type: 'persistent' | 'normal' | 'ephemeral'
+  deployed?: boolean
+  access_count?: number
+  score: number
+}
+
+export interface QueryResult {
+  total: number
+  items: QueryItem[]
 }
 
 export interface BackendStatus {
@@ -37,7 +66,7 @@ export interface SigilBackend {
   deploy(params: DeployParams): Promise<DeployResult>
   invoke(name: string, request: Request): Promise<Response>
   remove(name: string): Promise<void>
-  list(): Promise<Capability[]>
+  query(params: QueryParams): Promise<QueryResult>
   inspect(name: string): Promise<Capability | null>
   status(): Promise<BackendStatus>
 }

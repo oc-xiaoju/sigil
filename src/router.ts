@@ -30,9 +30,9 @@ export async function handleRequest(request: Request, env: RouterEnv): Promise<R
     return handleRemove(request, env)
   }
 
-  // GET /_api/list
-  if (method === 'GET' && path === '/_api/list') {
-    return handleList(request, env)
+  // GET /_api/query — public, no auth
+  if (method === 'GET' && path === '/_api/query') {
+    return handleQuery(request, env)
   }
 
   // GET /_api/inspect/{capability}
@@ -68,6 +68,9 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
       type: 'persistent' | 'normal' | 'ephemeral'
       ttl?: number
       bindings?: string[]
+      description?: string
+      tags?: string[]
+      examples?: string[]
     }
 
     // Check deploy cooldown
@@ -79,6 +82,9 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
       type: body.type,
       ttl: body.ttl,
       bindings: body.bindings,
+      description: body.description,
+      tags: body.tags,
+      examples: body.examples,
     })
 
     // Set cooldown after successful deploy
@@ -114,19 +120,17 @@ async function handleRemove(request: Request, env: RouterEnv): Promise<Response>
   }
 }
 
-async function handleList(request: Request, env: RouterEnv): Promise<Response> {
-  try {
-    const authHeader = request.headers.get('Authorization')
-    await env.auth.validateToken(authHeader)
+async function handleQuery(request: Request, env: RouterEnv): Promise<Response> {
+  const url = new URL(request.url)
+  const q = url.searchParams.get('q') ?? undefined
+  const modeRaw = url.searchParams.get('mode')
+  const mode = (modeRaw === 'find' || modeRaw === 'explore') ? modeRaw : undefined
+  const limitRaw = url.searchParams.get('limit')
+  const limit = limitRaw ? parseInt(limitRaw, 10) : undefined
+  const cursor = url.searchParams.get('cursor') ?? undefined
 
-    const list = await env.backend.list()
-    return jsonOk({ capabilities: list })
-  } catch (e) {
-    if (e instanceof AuthError) {
-      return jsonError(e.status, e.message)
-    }
-    throw e
-  }
+  const result = await env.backend.query({ q, mode, limit, cursor })
+  return jsonOk(result)
 }
 
 async function handleInspect(capability: string, env: RouterEnv): Promise<Response> {
