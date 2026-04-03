@@ -1,7 +1,6 @@
 // KV key prefixes and data types
 
 import type { InputSchema } from './codegen.js'
-import { CONFIG } from './config.js'
 
 export interface KvCodeValue {
   code: string
@@ -24,15 +23,9 @@ export interface KvLruValue {
   deployed: boolean
 }
 
-// slot:{n} — 槽位状态（物理页帧）
-export interface KvSlotValue {
-  capability: string | null
-  status: 'active' | 'free'
-}
-
-// route:{capability} — 存 slot index
 export interface KvRouteValue {
-  slot: number
+  worker_name: string
+  subdomain: string
 }
 
 export interface KvAuthValue {
@@ -86,7 +79,7 @@ export class KvStore {
     await this.kv.delete(`lru:${capability}`)
   }
 
-  // route:{capability} — 存 slot index
+  // route:{capability}
   async getRoute(capability: string): Promise<KvRouteValue | null> {
     return await this.kv.get(`route:${capability}`, 'json') as KvRouteValue | null
   }
@@ -95,30 +88,6 @@ export class KvStore {
   }
   async deleteRoute(capability: string): Promise<void> {
     await this.kv.delete(`route:${capability}`)
-  }
-
-  // slot:{n} — 槽位状态
-  async getSlot(index: number): Promise<KvSlotValue | null> {
-    return await this.kv.get(`slot:${index}`, 'json') as KvSlotValue | null
-  }
-  async setSlot(index: number, value: KvSlotValue): Promise<void> {
-    await this.kv.put(`slot:${index}`, JSON.stringify(value))
-  }
-
-  async findFreeSlot(): Promise<number | null> {
-    for (let i = 0; i < CONFIG.MAX_SLOTS; i++) {
-      const slot = await this.getSlot(i)
-      if (slot?.status === 'free') return i
-    }
-    return null
-  }
-
-  async findSlotByCapability(capability: string): Promise<number | null> {
-    for (let i = 0; i < CONFIG.MAX_SLOTS; i++) {
-      const slot = await this.getSlot(i)
-      if (slot?.capability === capability) return i
-    }
-    return null
   }
 
   // auth:deploy-token

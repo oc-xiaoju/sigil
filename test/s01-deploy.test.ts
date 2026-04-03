@@ -1,14 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, makeRequest, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, makeRequest, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { AuthModule } from '../src/auth.js'
 import { KvStore } from '../src/kv.js'
 import { handleRequest } from '../src/router.js'
-import { CONFIG } from '../src/config.js'
 
 describe('S1: 部署能力', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let auth: AuthModule
@@ -16,100 +15,182 @@ describe('S1: 部署能力', () => {
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi()
+    mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
+
+    // Set unified deploy token
     await auth.setToken('deploy-token')
-    for (let i = 0; i < CONFIG.MAX_SLOTS; i++) {
-      await kv.setSlot(i, { capability: null, status: 'free' })
-    }
   })
 
-  it('should deploy via API', async () => {
+  it('should deploy a capability via API', async () => {
     const req = makeRequest('POST', '/_api/deploy', {
       token: 'deploy-token',
-      body: { name: 'ping', code: "export default { fetch() { return new Response('pong') } }", type: 'normal' },
+      body: {
+        name: 'ping',
+        code: "export default { fetch() { return new Response('pong') } }",
+        type: 'normal',
+      },
     })
+
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     expect(resp.status).toBe(201)
-    const body = await resp.json() as { capability: string; url: string; cold_start: boolean }
+
+    const body = await resp.json() as {
+      capability: string
+      url: string
+      cold_start: boolean
+    }
     expect(body.capability).toBe('ping')
     expect(body.url).toBe('https://sigil.shazhou.workers.dev/run/ping')
     expect(body.cold_start).toBe(false)
   })
 
-  it('should call updateSlotCode on deploy', async () => {
-    await pool.deploy({ name: 'ping', code: "export default { fetch() { return new Response('pong') } }", type: 'normal' })
-    const updates = mockCf.updateSlotCodeCalls()
-    expect(updates).toHaveLength(1)
-    expect(updates[0]!.slotIndex).toBeGreaterThanOrEqual(0)
-    expect(updates[0]!.slotIndex).toBeLessThan(CONFIG.MAX_SLOTS)
+  it('should NOT call LOADER.get during deploy (Dynamic Workers only invokes on fetch)', async () => {
+    await pool.deploy({
+      name: 'ping',
+      code: "export default { fetch() { return new Response('pong') } }",
+      type: 'normal',
+    })
+
+    // LOADER.get() should NOT be called during deploy — only during invoke
+    expect(mockLoader.loaderCalls()).toHaveLength(0)
   })
 
-  it('should NOT call cfApi.invoke during deploy', async () => {
-    await pool.deploy({ name: 'ping', code: "export default { fetch() { return new Response('pong') } }", type: 'normal' })
-    expect(mockCf.invokeCalls()).toHaveLength(0)
-  })
+  it('should write KV entries (code, meta, lru)', async () => {
+    await pool.deploy({
+      name: 'ping',
+      code: "export default { fetch() { return new Response('pong') } }",
+      type: 'normal',
+    })
 
-  it('should write KV entries with slot route', async () => {
-    await pool.deploy({ name: 'ping', code: "export default { fetch() { return new Response('pong') } }", type: 'normal' })
-    expect(await kv.getCode('ping')).toBeTruthy()
-    expect((await kv.getMeta('ping'))?.type).toBe('normal')
+    const code = await kv.getCode('ping')
+    expect(code).toBeTruthy()
+
+    const meta = await kv.getMeta('ping')
+    expect(meta?.type).toBe('normal')
+
     const lru = await kv.getLru('ping')
     expect(lru?.deployed).toBe(true)
     expect(lru?.access_count).toBe(0)
-    const route = await kv.getRoute('ping')
-    expect(route).not.toBeNull()
-    expect(typeof route?.slot).toBe('number')
   })
 
-  it('should update slot to active after deploy', async () => {
-    await pool.deploy({ name: 'ping', code: "export default { fetch() { return new Response('pong') } }", type: 'normal' })
-    const route = await kv.getRoute('ping')
-    const slot = await kv.getSlot(route!.slot)
-    expect(slot?.status).toBe('active')
-    expect(slot?.capability).toBe('ping')
-  })
+  // --- 模式 B: schema + execute ---
 
-  it('模式 B: schema + execute', async () => {
+  it('模式 B: schema + execute 通过 API 部署', async () => {
     const req = makeRequest('POST', '/_api/deploy', {
       token: 'deploy-token',
-      body: { name: 'adder', type: 'normal',
-        schema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } }, required: ['a','b'] },
-        execute: 'return JSON.stringify({ sum: input.a + input.b })' },
+      body: {
+        name: 'adder',
+        type: 'normal',
+        schema: {
+          type: 'object',
+          properties: {
+            a: { type: 'number', description: 'First number' },
+            b: { type: 'number', description: 'Second number' },
+          },
+          required: ['a', 'b'],
+        },
+        execute: 'return JSON.stringify({ sum: input.a + input.b })',
+      },
     })
+
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     expect(resp.status).toBe(201)
-    expect((await resp.json() as any).capability).toBe('adder')
+
+    const body = await resp.json() as { capability: string; url: string }
+    expect(body.capability).toBe('adder')
+    expect(body.url).toBe('https://sigil.shazhou.workers.dev/run/adder')
   })
 
-  it('模式 B: 生成 code 含 export default', async () => {
+  it('模式 B: 生成的 code 存入 KV（包含 export default）', async () => {
     const req = makeRequest('POST', '/_api/deploy', {
       token: 'deploy-token',
-      body: { name: 'greeter', type: 'normal',
-        schema: { type: 'object', properties: { name: { type: 'string' } } },
-        execute: 'return "Hello, " + input.name + "!"' },
+      body: {
+        name: 'greeter',
+        type: 'normal',
+        schema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', default: 'World' },
+          },
+        },
+        execute: 'return "Hello, " + input.name + "!"',
+      },
     })
+
     await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+
     const code = await kv.getCode('greeter')
+    expect(code).toBeTruthy()
     expect(code).toContain('export default')
     expect(code).toContain('async fetch(request)')
   })
 
-  it('code + schema 同时 → 400', async () => {
+  it('模式 B: schema 存入 KV meta', async () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        from: { type: 'string', description: 'Source currency' },
+        to: { type: 'string', description: 'Target currency' },
+        amount: { type: 'number', description: 'Amount', default: 1 },
+      },
+      required: ['from', 'to'],
+    }
+
     const req = makeRequest('POST', '/_api/deploy', {
       token: 'deploy-token',
-      body: { name: 'bad', type: 'normal',
-        code: 'export default{}',
-        schema: { type: 'object', properties: {} }, execute: 'return "x"' },
+      body: {
+        name: 'currency',
+        type: 'persistent',
+        description: 'Currency converter',
+        tags: ['finance'],
+        schema,
+        execute: 'return JSON.stringify({ from: input.from, to: input.to, amount: input.amount })',
+      },
     })
-    expect((await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })).status).toBe(400)
+
+    await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+
+    const meta = await kv.getMeta('currency')
+    expect(meta?.schema).toBeDefined()
+    expect(meta?.schema?.properties.from.type).toBe('string')
+    expect(meta?.schema?.required).toContain('from')
+    expect(meta?.schema?.required).toContain('to')
   })
 
-  it('无 code 无 execute → 400', async () => {
-    const req = makeRequest('POST', '/_api/deploy', { token: 'deploy-token', body: { name: 'bad', type: 'normal' } })
-    expect((await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })).status).toBe(400)
+  it('模式 B + A 同时提供 → 400 错误', async () => {
+    const req = makeRequest('POST', '/_api/deploy', {
+      token: 'deploy-token',
+      body: {
+        name: 'bad',
+        type: 'normal',
+        code: 'export default { fetch() { return new Response("hi") } }',
+        schema: { properties: {} },
+        execute: 'return "hello"',
+      },
+    })
+
+    const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+    expect(resp.status).toBe(400)
+    const body = await resp.json() as { error: string }
+    expect(body.error).toContain('Cannot specify both code and schema/execute')
+  })
+
+  it('code 和 execute 都不提供 → 400 错误', async () => {
+    const req = makeRequest('POST', '/_api/deploy', {
+      token: 'deploy-token',
+      body: {
+        name: 'bad',
+        type: 'normal',
+      },
+    })
+
+    const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+    expect(resp.status).toBe(400)
+    const body = await resp.json() as { error: string }
+    expect(body.error).toContain('Must specify either code or schema+execute')
   })
 })

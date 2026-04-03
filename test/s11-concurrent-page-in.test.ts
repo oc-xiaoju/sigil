@@ -1,41 +1,52 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { KvStore } from '../src/kv.js'
-import { CONFIG } from '../src/config.js'
 
-describe('S11: 并发换入', () => {
+describe('S11: 并发换入去重', () => {
   let mockKv: KVNamespace
+  let mockLoader: ReturnType<typeof createMockLoader>
+  let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let kv: KvStore
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    const mockCf = createMockCfApi({ invokeResponse: () => new Response('pong', { status: 200 }) })
-    pool = new WorkerPool(mockKv, mockCf.cfApi, new MockEmbeddingService() as any)
+    mockLoader = createMockLoader({
+      invokeResponse: () => new Response('pong', { status: 200 }),
+    })
+    mockEmbed = new MockEmbeddingService()
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
-    for (let i = 0; i < CONFIG.MAX_SLOTS; i++) await kv.setSlot(i, { capability: null, status: 'free' })
+
+    // Simulate evicted capability: code in KV but not deployed
     await kv.setCode('ping', "export default { fetch() { return new Response('pong') } }")
-    await kv.setMeta('ping', { type: 'normal', created_at: Date.now() - 10000 })
-    await kv.setLru('ping', { last_access: Date.now() - 10000, access_count: 0, deployed: false })
+    await kv.setMeta('ping', {
+      type: 'normal',
+      created_at: Date.now() - 10000,
+    })
+    await kv.setLru('ping', {
+      last_access: Date.now() - 10000,
+      access_count: 0,
+      deployed: false,
+    })
   })
 
   it('should handle concurrent page-ins without error', async () => {
-    const [r1, r2] = await Promise.all([
-      pool.invoke('ping', new Request('https://sigil.shazhou.workers.dev/run/ping')),
-      pool.invoke('ping', new Request('https://sigil.shazhou.workers.dev/run/ping')),
-    ])
-    expect(r1.status).toBe(200)
-    expect(r2.status).toBe(200)
-  })
+    const req1 = new Request('https://sigil.shazhou.workers.dev/run/ping')
+    const req2 = new Request('https://sigil.shazhou.workers.dev/run/ping')
 
-  it('should have route after concurrent page-in', async () => {
-    await Promise.all([
-      pool.invoke('ping', new Request('https://sigil.shazhou.workers.dev/run/ping')),
-      pool.invoke('ping', new Request('https://sigil.shazhou.workers.dev/run/ping')),
+    // Fire concurrently
+    const [resp1, resp2] = await Promise.all([
+      pool.invoke('ping', req1),
+      pool.invoke('ping', req2),
     ])
-    const route = await kv.getRoute('ping')
-    expect(route).not.toBeNull()
-    expect(typeof route?.slot).toBe('number')
+
+    expect(resp1.status).toBe(200)
+    expect(resp2.status).toBe(200)
+
+    // LOADER.get() should be called (at least once — may be called for each concurrent request)
+    const loaderCalls = mockLoader.loaderCalls()
+    expect(loaderCalls.length).toBeGreaterThanOrEqual(1)
   })
 })
