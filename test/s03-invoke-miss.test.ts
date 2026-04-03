@@ -1,22 +1,22 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { KvStore } from '../src/kv.js'
 
 describe('S3: 调用未部署能力（换入）', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let kv: KvStore
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi({
+    mockLoader = createMockLoader({
       invokeResponse: () => new Response('pong', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
 
     // Manually write KV to simulate "evicted but not deleted from KV" state
@@ -32,12 +32,12 @@ describe('S3: 调用未部署能力（换入）', () => {
     })
   })
 
-  it('should page in and call deployWorker', async () => {
+  it('should page in and call LOADER.get', async () => {
     const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
     const resp = await pool.invoke('ping', req)
 
     expect(resp.status).toBe(200)
-    expect(mockCf.deployCalls()).toContain('s-ping')
+    expect(mockLoader.loaderCalls()).toContain('s-ping')
   })
 
   it('should set lru.deployed=true after page-in', async () => {

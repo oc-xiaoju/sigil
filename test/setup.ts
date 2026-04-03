@@ -1,4 +1,5 @@
-// Test setup — mock KV and CfApi
+// Refactored: MockCfApi replaced with MockLoader (Dynamic Workers LOADER binding).
+// CfApi interface and subdomain helpers removed; invoke now uses LOADER.get().
 
 import { EmbeddingService } from '../src/embedding.js'
 
@@ -84,59 +85,47 @@ export function createMockKv(): KVNamespace {
   } as unknown as KVNamespace
 }
 
-export interface MockCfApiCall {
-  method: 'deployWorker' | 'deleteWorker' | 'invoke'
-  args: unknown[]
+export interface MockLoaderGetCall {
+  workerId: string
 }
 
 /**
- * Mock CfApi that records calls without real CF API interaction.
+ * Mock Dynamic Workers LOADER binding.
+ * Records LOADER.get() calls and returns a mock Worker whose
+ * getEntrypoint().fetch() delegates to the provided invokeResponse factory.
  */
-export function createMockCfApi(overrides?: {
-  invokeResponse?: (workerName: string, request: Request) => Response
+export function createMockLoader(overrides?: {
+  invokeResponse?: (workerId: string, request: Request) => Response | Promise<Response>
 }) {
-  const calls: MockCfApiCall[] = []
-  const deployedWorkers = new Set<string>()
+  const getCalls: MockLoaderGetCall[] = []
 
   return {
-    calls,
-    deployedWorkers,
+    getCalls,
 
-    cfApi: {
-      async deployWorker(name: string, code: string): Promise<void> {
-        calls.push({ method: 'deployWorker', args: [name, code] })
-        deployedWorkers.add(name)
-      },
-
-      async deleteWorker(name: string): Promise<void> {
-        calls.push({ method: 'deleteWorker', args: [name] })
-        deployedWorkers.delete(name)
-      },
-
-      getWorkerSubdomain(name: string): string {
-        return `${name}.shazhou.workers.dev`
-      },
-
-      async invoke(workerName: string, request: Request): Promise<Response> {
-        calls.push({ method: 'invoke', args: [workerName] })
-        if (overrides?.invokeResponse) {
-          return overrides.invokeResponse(workerName, request)
+    loader: {
+      async get(workerId: string, _loadFn: () => Promise<{ code: string }>) {
+        getCalls.push({ workerId })
+        return {
+          getEntrypoint() {
+            return {
+              async fetch(request: Request): Promise<Response> {
+                if (overrides?.invokeResponse) {
+                  return overrides.invokeResponse(workerId, request)
+                }
+                return new Response('mock response', { status: 200 })
+              },
+            }
+          },
         }
-        return new Response('mock response', { status: 200 })
       },
     },
 
-    deployCalls(): string[] {
-      return calls.filter(c => c.method === 'deployWorker').map(c => c.args[0] as string)
-    },
-
-    deleteCalls(): string[] {
-      return calls.filter(c => c.method === 'deleteWorker').map(c => c.args[0] as string)
+    loaderCalls(): string[] {
+      return getCalls.map(c => c.workerId)
     },
 
     reset(): void {
-      calls.length = 0
-      deployedWorkers.clear()
+      getCalls.length = 0
     },
   }
 }
@@ -190,12 +179,9 @@ function generateDeterministicVector(seed: number, dim: number): number[] {
   const vec: number[] = []
   let s = seed
   for (let i = 0; i < dim; i++) {
-    // lcg-like RNG
     s = (s * 1664525 + 1013904223) >>> 0
-    // Map to [-1, 1]
     vec.push((s / 0xffffffff) * 2 - 1)
   }
-  // Normalize to unit vector
   const norm = Math.sqrt(vec.reduce((a, x) => a + x * x, 0))
   return vec.map(x => x / norm)
 }
@@ -212,7 +198,6 @@ export class MockEmbeddingService {
     return EmbeddingService.buildCapabilityText(params)
   }
 
-  // Override the vector for a specific text (for semantic similarity tests)
   setVector(textOrKey: string, vector: number[]): void {
     this.overrides.set(textOrKey, vector)
   }
@@ -232,4 +217,3 @@ export class MockEmbeddingService {
     return this.embed(query)
   }
 }
-

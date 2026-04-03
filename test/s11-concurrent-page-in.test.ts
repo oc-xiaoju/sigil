@@ -1,22 +1,22 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { KvStore } from '../src/kv.js'
 
 describe('S11: 并发换入去重', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let kv: KvStore
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi({
+    mockLoader = createMockLoader({
       invokeResponse: () => new Response('pong', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
 
     // Simulate evicted capability: code in KV but not deployed
@@ -45,8 +45,9 @@ describe('S11: 并发换入去重', () => {
     expect(resp1.status).toBe(200)
     expect(resp2.status).toBe(200)
 
-    // Should only deploy once
-    const deployCalls = mockCf.deployCalls()
-    expect(deployCalls.filter(n => n === 's-ping')).toHaveLength(1)
+    // Both calls go through LOADER.get(); Dynamic Workers deduplicates internally
+    const loaderCalls = mockLoader.loaderCalls()
+    expect(loaderCalls.length).toBeGreaterThanOrEqual(1)
+    expect(loaderCalls.every(id => id === 's-ping')).toBe(true)
   })
 })

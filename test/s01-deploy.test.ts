@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, makeRequest, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, makeRequest, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { AuthModule } from '../src/auth.js'
 import { KvStore } from '../src/kv.js'
@@ -7,7 +7,7 @@ import { handleRequest } from '../src/router.js'
 
 describe('S1: 部署能力', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let auth: AuthModule
@@ -15,9 +15,9 @@ describe('S1: 部署能力', () => {
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi()
+    mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 
@@ -48,14 +48,15 @@ describe('S1: 部署能力', () => {
     expect(body.cold_start).toBe(false)
   })
 
-  it('should call CfApi.deployWorker', async () => {
+  it('should NOT call CF API deployWorker (Dynamic Workers only)', async () => {
     await pool.deploy({
       name: 'ping',
       code: "export default { fetch() { return new Response('pong') } }",
       type: 'normal',
     })
 
-    expect(mockCf.deployCalls()).toContain('s-ping')
+    // LOADER.get() should NOT be called during deploy — only during invoke
+    expect(mockLoader.loaderCalls()).toHaveLength(0)
   })
 
   it('should write KV entries (code, meta, lru, route)', async () => {

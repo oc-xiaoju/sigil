@@ -1,18 +1,12 @@
-import type { SigilBackend, DeployParams, DeployResult, Capability, BackendStatus, QueryParams, QueryResult, QueryItem, ResolveInvokeResult, ResolveInvokeError } from './types.js'
+// Dynamic Workers backend — no CF REST API calls.
+// deploy() stores code in KV; invoke() uses LOADER.get() to run it.
+// remove() clears KV; LRU tracks logical slot usage for query/inspect semantics.
+
+import type { SigilBackend, DeployParams, DeployResult, Capability, BackendStatus, QueryParams, QueryResult, QueryItem } from './types.js'
 import { KvStore } from '../kv.js'
 import { LruScheduler } from '../lru.js'
 import { CONFIG } from '../config.js'
 import { EmbeddingService, cosineSimilarity, mmrSelect } from '../embedding.js'
-
-export interface CfApi {
-  deployWorker(name: string, code: string): Promise<void>
-  deleteWorker(name: string): Promise<void>
-  getWorkerSubdomain(name: string): string
-  invoke(workerName: string, request: Request): Promise<Response>
-}
-
-// In-flight page-in tracking to deduplicate concurrent requests
-const inFlightPageIns = new Map<string, Promise<void>>()
 
 export class WorkerPool implements SigilBackend {
   private kv: KvStore
@@ -22,7 +16,7 @@ export class WorkerPool implements SigilBackend {
 
   constructor(
     kv: KVNamespace,
-    private cfApi: CfApi,
+    private loader: any,  // Dynamic Workers LOADER binding
     embeddingService: EmbeddingService,
   ) {
     this.kv = new KvStore(kv)
@@ -31,16 +25,11 @@ export class WorkerPool implements SigilBackend {
   }
 
   private async generateHash(input: string): Promise<string> {
-    // Use Web Crypto API (available in CF Workers and Node 15+)
     const encoder = new TextEncoder()
     const data = encoder.encode(input)
     const hashBuffer = await crypto.subtle.digest('SHA-256', data)
     const hashArray = Array.from(new Uint8Array(hashBuffer))
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, this.config.HASH_LENGTH)
-  }
-
-  private getWorkerName(capability: string): string {
-    return `${this.config.WORKER_PREFIX}${capability}`
   }
 
   async deploy(params: DeployParams): Promise<DeployResult> {
@@ -53,29 +42,24 @@ export class WorkerPool implements SigilBackend {
     // Determine capability name
     let capability: string
     if (name === null) {
-      // Generate ephemeral name: t-{6hex}
       const hash = await this.generateHash(code + Date.now())
       capability = `t-${hash}`
     } else {
       capability = name
     }
 
-    const workerName = this.getWorkerName(capability)
     const now = Date.now()
 
-    // Check if we need to evict (loop handles KV eventual-consistency skew)
+    // Logical LRU eviction — evict oldest when slot quota exceeded
+    // Dynamic Workers manages actual warm instances; this is logical tracking only.
     let deployed = await this.lru.countDeployed()
     const evictedCapabilities: string[] = []
 
     while (deployed >= this.config.MAX_SLOTS) {
       const candidate = await this.lru.findEvictionCandidate()
-      if (!candidate) break // nothing evictable
+      if (!candidate) break
 
       evictedCapabilities.push(candidate.capability)
-      const route = await this.kv.getRoute(candidate.capability)
-      if (route) {
-        await this.cfApi.deleteWorker(route.worker_name)
-      }
       await this.kv.setLru(candidate.capability, {
         ...(await this.kv.getLru(candidate.capability))!,
         deployed: false,
@@ -87,11 +71,7 @@ export class WorkerPool implements SigilBackend {
 
     const evictedCapability = evictedCapabilities[0]
 
-    // Deploy the worker
-    await this.cfApi.deployWorker(workerName, code)
-    const subdomain = this.cfApi.getWorkerSubdomain(workerName)
-
-    // Write KV entries
+    // Store code and metadata in KV — Dynamic Workers loads from here at runtime
     await this.kv.setCode(capability, code)
     await this.kv.setMeta(capability, {
       type,
@@ -108,12 +88,8 @@ export class WorkerPool implements SigilBackend {
       access_count: 0,
       deployed: true,
     })
-    await this.kv.setRoute(capability, {
-      worker_name: workerName,
-      subdomain,
-    })
 
-    // Compute and store embedding (if description or tags or examples are provided)
+    // Compute and store embedding (non-fatal if it fails)
     try {
       const text = EmbeddingService.buildCapabilityText({
         name: capability,
@@ -124,7 +100,6 @@ export class WorkerPool implements SigilBackend {
       const vector = await this.embeddingService.embed(text)
       await this.kv.setEmbedding(capability, vector)
     } catch (e) {
-      // Non-fatal: embedding failure doesn't break deploy
       console.error('[sigil] embedding error during deploy:', e)
     }
 
@@ -147,179 +122,41 @@ export class WorkerPool implements SigilBackend {
   }
 
   async invoke(capabilityName: string, request: Request): Promise<Response> {
+    // Check capability exists
     const lru = await this.kv.getLru(capabilityName)
+    const code = await this.kv.getCode(capabilityName)
 
-    if (!lru) {
-      // Check if we have code (page-in scenario)
-      const code = await this.kv.getCode(capabilityName)
-      if (!code) {
-        return new Response(JSON.stringify({ error: 'Capability not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-
-      // Page in
-      return await this.pageIn(capabilityName, code, request, true)
-    }
-
-    if (!lru.deployed) {
-      // Need to page in
-      const code = await this.kv.getCode(capabilityName)
-      if (!code) {
-        return new Response(JSON.stringify({ error: 'Capability not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-
-      return await this.pageIn(capabilityName, code, request, true)
-    }
-
-    // Warm hit — update LRU and invoke
-    await this.kv.setLru(capabilityName, {
-      ...lru,
-      last_access: Date.now(),
-      access_count: lru.access_count + 1,
-    })
-
-    const route = await this.kv.getRoute(capabilityName)
-    if (!route) {
-      return new Response(JSON.stringify({ error: 'Route not found' }), {
-        status: 500,
+    if (!code) {
+      return new Response(JSON.stringify({ error: 'Capability not found' }), {
+        status: 404,
         headers: { 'Content-Type': 'application/json' },
       })
     }
 
-    return await this.cfApi.invoke(route.worker_name, request)
-  }
+    const isColdStart = !lru?.deployed
 
-  async resolveInvoke(capabilityName: string, _request: Request): Promise<ResolveInvokeResult | ResolveInvokeError> {
-    const lru = await this.kv.getLru(capabilityName)
-    let coldStart = false
-
-    if (!lru) {
-      // Check if we have code (page-in scenario)
-      const code = await this.kv.getCode(capabilityName)
-      if (!code) {
-        return { error: 'Capability not found', status: 404 }
-      }
-      // Page in the worker
-      await this.doPageIn(capabilityName, code)
-      coldStart = true
-    } else if (!lru.deployed) {
-      const code = await this.kv.getCode(capabilityName)
-      if (!code) {
-        return { error: 'Capability not found', status: 404 }
-      }
-      await this.doPageIn(capabilityName, code)
-      coldStart = true
-    } else {
-      // Warm hit — update LRU
-      await this.kv.setLru(capabilityName, {
-        ...lru,
-        last_access: Date.now(),
-        access_count: lru.access_count + 1,
-      })
-    }
-
-    const route = await this.kv.getRoute(capabilityName)
-    if (!route) {
-      return { error: 'Route not found', status: 500 }
-    }
-
-    return { subdomain: route.subdomain, cold_start: coldStart }
-  }
-
-  private async doPageIn(capability: string, code: string): Promise<void> {
-    // Check rate limit BEFORE eviction/deployment
-    await this.lru.checkPageRate()
-
-    // Evict until we have a free slot (loop handles KV eventual-consistency skew)
-    let deployed = await this.lru.countDeployed()
-    while (deployed >= this.config.MAX_SLOTS) {
-      const candidate = await this.lru.findEvictionCandidate()
-      if (!candidate) break // no evictable candidate — proceed anyway
-
-      const route = await this.kv.getRoute(candidate.capability)
-      if (route) {
-        await this.cfApi.deleteWorker(route.worker_name)
-      }
-      const existingLru = await this.kv.getLru(candidate.capability)
-      if (existingLru) {
-        await this.kv.setLru(candidate.capability, {
-          ...existingLru,
-          deployed: false,
-        })
-      }
-      await this.kv.incrementEvictionCount()
-
-      // Re-count after eviction so the while condition is accurate
-      deployed = await this.lru.countDeployed()
-    }
-
-    const workerName = this.getWorkerName(capability)
-    await this.cfApi.deployWorker(workerName, code)
-    const subdomain = this.cfApi.getWorkerSubdomain(workerName)
-
-    const now = Date.now()
-    await this.kv.setRoute(capability, { worker_name: workerName, subdomain })
-    await this.kv.setLru(capability, {
-      last_access: now,
-      access_count: 1,
+    // Update LRU access tracking
+    await this.kv.setLru(capabilityName, {
+      last_access: Date.now(),
+      access_count: (lru?.access_count ?? 0) + 1,
       deployed: true,
     })
-  }
 
-  private async pageIn(
-    capability: string,
-    code: string,
-    request: Request,
-    isColdStart: boolean,
-  ): Promise<Response> {
-    // Deduplicate concurrent page-ins
-    const existing = inFlightPageIns.get(capability)
-    if (existing) {
-      // Wait for in-flight page-in to complete (may throw)
-      await existing
-    } else {
-      // We are the "primary" page-in for this capability
-      const primaryPageIn = this.doPageIn(capability, code)
-      inFlightPageIns.set(capability, primaryPageIn)
-      try {
-        await primaryPageIn
-      } finally {
-        inFlightPageIns.delete(capability)
-      }
-    }
+    // Build a stable ID that changes when code changes — fresh isolate on redeploy
+    const codeHash = await this.generateHash(code)
+    const workerId = `sigil-${capabilityName}:${codeHash}`
 
-    // Re-check: after page-in we should have route
-    const lru = await this.kv.getLru(capability)
-    if (!lru?.deployed) {
-      return new Response(JSON.stringify({ error: 'Page-in failed' }), {
-        status: 503,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
+    // LOADER.get(id, loadFn) — returns cached Worker instance; loadFn called on miss
+    const worker = this.loader.get(workerId, async () => ({
+      compatibilityDate: '2026-04-03',
+      mainModule: 'index.js',
+      modules: { 'index.js': code },
+      globalOutbound: null,  // block outbound network for safety
+    }))
 
-    const route = await this.kv.getRoute(capability)
-    if (!route) {
-      return new Response(JSON.stringify({ error: 'Route not found after page-in' }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
+    const entrypoint = worker.getEntrypoint()
+    const response = await entrypoint.fetch(request)
 
-    // Update LRU
-    await this.kv.setLru(capability, {
-      ...lru,
-      last_access: Date.now(),
-      access_count: lru.access_count + 1,
-    })
-
-    const response = await this.cfApi.invoke(route.worker_name, request)
-
-    // Add cold start header
     if (isColdStart) {
       const headers = new Headers(response.headers)
       headers.set('X-Sigil-Cold-Start', 'true')
@@ -333,35 +170,24 @@ export class WorkerPool implements SigilBackend {
   }
 
   async remove(capabilityName: string): Promise<void> {
-    const lru = await this.kv.getLru(capabilityName)
-
-    if (lru?.deployed) {
-      const route = await this.kv.getRoute(capabilityName)
-      if (route) {
-        await this.cfApi.deleteWorker(route.worker_name)
-      }
-    }
-
+    // Dynamic Workers: no CF API call — just clear KV.
+    // LOADER cache expires naturally; code is gone from KV.
     await this.kv.deleteCode(capabilityName)
     await this.kv.deleteMeta(capabilityName)
     await this.kv.deleteLru(capabilityName)
-    await this.kv.deleteRoute(capabilityName)
     await this.kv.deleteEmbedding(capabilityName)
   }
 
   async query(params: QueryParams): Promise<QueryResult> {
     const { q, mode: rawMode, limit: rawLimit, cursor } = params
 
-    // Determine effective mode
     const mode = rawMode ?? (q ? 'find' : 'explore')
     const defaultLimit = mode === 'find' ? 3 : 20
     const limit = rawLimit ?? defaultLimit
 
-    // Fetch all capabilities
     const caps = await this.kv.listCapabilities()
 
     if (!q) {
-      // No query — explore mode: sort by created_at descending, return summaries
       const allCapabilities: Capability[] = []
 
       for (const cap of caps) {
@@ -404,11 +230,8 @@ export class WorkerPool implements SigilBackend {
       return { total, items: paged }
     }
 
-    // Has query — try embedding search
-    // Get query embedding
     const queryVec = await this.embeddingService.embedQuery(q)
 
-    // Load all capabilities with their embeddings
     const embeddingCandidates: Array<{
       capability: string
       vector: number[]
@@ -424,10 +247,8 @@ export class WorkerPool implements SigilBackend {
       if (!meta || !lru) continue
 
       if (vector) {
-        // Has embedding — use semantic search
         embeddingCandidates.push({ capability: cap, vector, meta, lru })
       } else {
-        // No embedding (old data) — fallback to string matching
         fallbackCandidates.push({
           capability: cap,
           type: meta.type,
@@ -443,7 +264,6 @@ export class WorkerPool implements SigilBackend {
       }
     }
 
-    // Fallback: string.includes for old capabilities without embeddings
     const qLower = q.toLowerCase()
     const fallbackItems: QueryItem[] = fallbackCandidates
       .filter(cap => {
@@ -461,14 +281,13 @@ export class WorkerPool implements SigilBackend {
         type: cap.type,
         deployed: cap.deployed,
         access_count: cap.access_count,
-        score: 0.5,  // Default score for fallback
+        score: 0.5,
         schema: cap.schema,
       }))
 
     const effectiveMode = (mode === 'find' && !q) ? 'explore' : mode
 
     if (effectiveMode === 'find') {
-      // Cosine similarity top-K
       const scored = embeddingCandidates
         .map(c => ({
           ...c,
@@ -490,7 +309,6 @@ export class WorkerPool implements SigilBackend {
         schema: c.meta.schema,
       }))
 
-      // Merge embedding results with fallback results (embedding takes priority)
       const embeddingCaps = new Set(embeddingItems.map(i => i.capability))
       const fallbackOnly = fallbackItems.filter(i => !embeddingCaps.has(i.capability))
       const items = [...embeddingItems, ...fallbackOnly]
@@ -501,7 +319,6 @@ export class WorkerPool implements SigilBackend {
       const total = items.length
       return { total, items: items.slice(offset, offset + limit) }
     } else {
-      // MMR for explore
       const results = mmrSelect(queryVec, embeddingCandidates, limit, 0.5)
 
       const embeddingItems: QueryItem[] = results
@@ -513,7 +330,6 @@ export class WorkerPool implements SigilBackend {
           score: Math.round(r.score * 1000) / 1000,
         }))
 
-      // Merge with fallback
       const embeddingCaps = new Set(embeddingItems.map(i => i.capability))
       const fallbackOnly = fallbackItems
         .filter(i => !embeddingCaps.has(i.capability))

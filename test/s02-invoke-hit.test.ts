@@ -1,22 +1,22 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { KvStore } from '../src/kv.js'
 
 describe('S2: 调用已部署能力（命中）', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let kv: KvStore
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi({
+    mockLoader = createMockLoader({
       invokeResponse: (_workerName, _req) => new Response('pong', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
 
     // Deploy first
@@ -25,7 +25,7 @@ describe('S2: 调用已部署能力（命中）', () => {
       code: "export default { fetch() { return new Response('pong') } }",
       type: 'normal',
     })
-    mockCf.reset()
+    mockLoader.reset()
   })
 
   it('should invoke warm capability', async () => {
@@ -52,6 +52,7 @@ describe('S2: 调用已部署能力（命中）', () => {
   it('should NOT call deployWorker on warm hit', async () => {
     const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
     await pool.invoke('ping', req)
-    expect(mockCf.deployCalls()).toHaveLength(0)
+    // LOADER.get() should be called for invoke, but no CF API deploy
+    expect(mockLoader.loaderCalls()).toContain('s-ping')
   })
 })

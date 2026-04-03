@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { KvStore } from '../src/kv.js'
 import { CONFIG } from '../src/config.js'
@@ -7,18 +7,18 @@ import { PageRateLimitError } from '../src/lru.js'
 
 describe('S12: 换页速率限制', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let kv: KvStore
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi({
+    mockLoader = createMockLoader({
       invokeResponse: () => new Response('ok', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
   })
 

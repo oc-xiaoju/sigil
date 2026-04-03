@@ -17,7 +17,7 @@ describe('S7: 列出能力（已迁移至 query 接口）', () => {
     mockKv = createMockKv()
     mockCf = createMockCfApi()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 

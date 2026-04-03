@@ -1,18 +1,18 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 
 describe('S5: 调用不存在的能力', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
 
   beforeEach(() => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi()
+    mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
   })
 
   it('should return 404 for nonexistent capability', async () => {
@@ -28,9 +28,9 @@ describe('S5: 调用不存在的能力', () => {
     expect(body.error).toBeTruthy()
   })
 
-  it('should not call deployWorker for nonexistent', async () => {
+  it('should not call LOADER.get for nonexistent capability', async () => {
     const req = new Request('https://sigil.shazhou.workers.dev/run/nonexistent')
     await pool.invoke('nonexistent', req)
-    expect(mockCf.deployCalls()).toHaveLength(0)
+    expect(mockLoader.loaderCalls()).toHaveLength(0)
   })
 })

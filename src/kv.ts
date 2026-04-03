@@ -14,18 +14,13 @@ export interface KvMetaValue {
   description?: string
   tags?: string[]
   examples?: string[]
-  schema?: InputSchema    // 新增：模式 B deploy 时存储，find 模式返回
+  schema?: InputSchema
 }
 
 export interface KvLruValue {
   last_access: number
   access_count: number
   deployed: boolean
-}
-
-export interface KvRouteValue {
-  worker_name: string
-  subdomain: string
 }
 
 export interface KvAuthValue {
@@ -83,19 +78,6 @@ export class KvStore {
 
   async deleteLru(capability: string): Promise<void> {
     await this.kv.delete(`lru:${capability}`)
-  }
-
-  // route:{capability}
-  async getRoute(capability: string): Promise<KvRouteValue | null> {
-    return await this.kv.get(`route:${capability}`, 'json') as KvRouteValue | null
-  }
-
-  async setRoute(capability: string, route: KvRouteValue): Promise<void> {
-    await this.kv.put(`route:${capability}`, JSON.stringify(route))
-  }
-
-  async deleteRoute(capability: string): Promise<void> {
-    await this.kv.delete(`route:${capability}`)
   }
 
   // auth:deploy-token — single unified token

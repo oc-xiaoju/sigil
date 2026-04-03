@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, makeRequest, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, makeRequest, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { AuthModule } from '../src/auth.js'
 import { KvStore } from '../src/kv.js'
@@ -7,7 +7,7 @@ import { handleRequest } from '../src/router.js'
 
 describe('S9: 无 token 拒绝', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let auth: AuthModule
@@ -15,9 +15,9 @@ describe('S9: 无 token 拒绝', () => {
 
   beforeEach(() => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi()
+    mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
   })

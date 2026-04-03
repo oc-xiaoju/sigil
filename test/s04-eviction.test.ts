@@ -1,23 +1,23 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { KvStore } from '../src/kv.js'
 import { CONFIG } from '../src/config.js'
 
 describe('S4: 配额满时换出', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let kv: KvStore
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi({
+    mockLoader = createMockLoader({
       invokeResponse: () => new Response('ok', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
   })
 
@@ -53,8 +53,9 @@ describe('S4: 配额满时换出', () => {
     expect(result.capability).toBe('new-cap')
     expect(result.evicted).toBe('cap0')
 
-    // cap0 should have been deleted
-    expect(mockCf.deleteCalls()).toContain('s-cap0')
+    // cap0 should have been logically evicted (deployed=false)
+    // No CF API deleteWorker call with Dynamic Workers
+    expect(mockLoader.loaderCalls()).toHaveLength(0)
 
     // cap0 lru should be deployed=false
     const evictedLru = await kv.getLru('cap0')
@@ -141,6 +142,7 @@ describe('S4: 配额满时换出', () => {
 
     // Should evict the expired ephemeral, not the coldest normal
     expect(result.evicted).toBe('ephemeral-old')
-    expect(mockCf.deleteCalls()).toContain('s-ephemeral-old')
+    const evictedLru = await kv.getLru('ephemeral-old')
+    expect(evictedLru?.deployed).toBe(false)
   })
 })

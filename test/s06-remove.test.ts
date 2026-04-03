@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, makeRequest, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, makeRequest, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { AuthModule } from '../src/auth.js'
 import { KvStore } from '../src/kv.js'
@@ -7,7 +7,7 @@ import { handleRequest } from '../src/router.js'
 
 describe('S6: 删除能力', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let auth: AuthModule
@@ -15,9 +15,9 @@ describe('S6: 删除能力', () => {
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi()
+    mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 
@@ -29,10 +29,10 @@ describe('S6: 删除能力', () => {
       code: "export default { fetch() { return new Response('pong') } }",
       type: 'normal',
     })
-    mockCf.reset()
+    mockLoader.reset()
   })
 
-  it('should call CfApi.deleteWorker', async () => {
+  it('should NOT call CF API deleteWorker (Dynamic Workers; KV cleanup only)', async () => {
     const req = makeRequest('DELETE', '/_api/remove', {
       token: 'deploy-token',
       body: { capability: 'ping' },
@@ -40,7 +40,8 @@ describe('S6: 删除能力', () => {
 
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     expect(resp.status).toBe(200)
-    expect(mockCf.deleteCalls()).toContain('s-ping')
+    // LOADER should not be called during remove
+    expect(mockLoader.loaderCalls()).toHaveLength(0)
   })
 
   it('should clear all KV entries', async () => {
