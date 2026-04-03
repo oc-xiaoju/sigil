@@ -1,5 +1,7 @@
 // Test setup — mock KV and CfApi
 
+import { EmbeddingService } from '../src/embedding.js'
+
 export interface MockKvEntry {
   value: string
   metadata?: unknown
@@ -172,3 +174,62 @@ export function makeRequest(
 
   return new Request(url, init)
 }
+
+// Simple deterministic hash (for mock vectors)
+function simpleHash(text: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = (h * 0x01000193) >>> 0
+  }
+  return h
+}
+
+// Generate a deterministic unit vector of given dimension
+function generateDeterministicVector(seed: number, dim: number): number[] {
+  const vec: number[] = []
+  let s = seed
+  for (let i = 0; i < dim; i++) {
+    // lcg-like RNG
+    s = (s * 1664525 + 1013904223) >>> 0
+    // Map to [-1, 1]
+    vec.push((s / 0xffffffff) * 2 - 1)
+  }
+  // Normalize to unit vector
+  const norm = Math.sqrt(vec.reduce((a, x) => a + x * x, 0))
+  return vec.map(x => x / norm)
+}
+
+/**
+ * Mock EmbeddingService for unit tests.
+ * Returns deterministic vectors. Supports manual vector overrides
+ * to simulate semantic similarity.
+ */
+export class MockEmbeddingService {
+  private overrides = new Map<string, number[]>()
+
+  static buildCapabilityText(params: any): string {
+    return EmbeddingService.buildCapabilityText(params)
+  }
+
+  // Override the vector for a specific text (for semantic similarity tests)
+  setVector(textOrKey: string, vector: number[]): void {
+    this.overrides.set(textOrKey, vector)
+  }
+
+  async embed(text: string): Promise<number[]> {
+    if (this.overrides.has(text)) {
+      return this.overrides.get(text)!
+    }
+    const hash = simpleHash(text)
+    return generateDeterministicVector(hash, 768)
+  }
+
+  async embedQuery(query: string): Promise<number[]> {
+    if (this.overrides.has(query)) {
+      return this.overrides.get(query)!
+    }
+    return this.embed(query)
+  }
+}
+

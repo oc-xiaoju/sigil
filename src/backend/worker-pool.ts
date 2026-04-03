@@ -2,7 +2,7 @@ import type { SigilBackend, DeployParams, DeployResult, Capability, BackendStatu
 import { KvStore } from '../kv.js'
 import { LruScheduler, PageRateLimitError } from '../lru.js'
 import { CONFIG } from '../config.js'
-import { scoreCapability, applyExploreDedup } from '../scoring.js'
+import { EmbeddingService, cosineSimilarity, mmrSelect } from '../embedding.js'
 
 export interface CfApi {
   deployWorker(name: string, code: string): Promise<void>
@@ -17,14 +17,17 @@ const inFlightPageIns = new Map<string, Promise<void>>()
 export class WorkerPool implements SigilBackend {
   private kv: KvStore
   private lru: LruScheduler
+  private embeddingService: EmbeddingService
   private config = CONFIG
 
   constructor(
     kv: KVNamespace,
     private cfApi: CfApi,
+    embeddingService: EmbeddingService,
   ) {
     this.kv = new KvStore(kv)
     this.lru = new LruScheduler(this.kv)
+    this.embeddingService = embeddingService
   }
 
   private async generateHash(input: string): Promise<string> {
@@ -104,6 +107,21 @@ export class WorkerPool implements SigilBackend {
       worker_name: workerName,
       subdomain,
     })
+
+    // Compute and store embedding (if description or tags or examples are provided)
+    try {
+      const text = EmbeddingService.buildCapabilityText({
+        name: capability,
+        description,
+        tags,
+        examples,
+      })
+      const vector = await this.embeddingService.embed(text)
+      await this.kv.setEmbedding(capability, vector)
+    } catch (e) {
+      // Non-fatal: embedding failure doesn't break deploy
+      console.error('[sigil] embedding error during deploy:', e)
+    }
 
     const url = `${this.config.GATEWAY_URL}/run/${capability}`
     const result: DeployResult = {
@@ -286,6 +304,7 @@ export class WorkerPool implements SigilBackend {
     await this.kv.deleteMeta(capabilityName)
     await this.kv.deleteLru(capabilityName)
     await this.kv.deleteRoute(capabilityName)
+    await this.kv.deleteEmbedding(capabilityName)
   }
 
   async query(params: QueryParams): Promise<QueryResult> {
@@ -298,94 +317,171 @@ export class WorkerPool implements SigilBackend {
 
     // Fetch all capabilities
     const caps = await this.kv.listCapabilities()
-    const allCapabilities: Capability[] = []
-
-    for (const cap of caps) {
-      const meta = await this.kv.getMeta(cap)
-      const lru = await this.kv.getLru(cap)
-      if (!meta || !lru) continue
-
-      const capability: Capability = {
-        capability: cap,
-        type: meta.type,
-        deployed: lru.deployed,
-        last_access: lru.last_access,
-        access_count: lru.access_count,
-        created_at: meta.created_at,
-        description: meta.description,
-        tags: meta.tags,
-        examples: meta.examples,
-      }
-
-      if (meta.ttl !== undefined) {
-        capability.ttl = meta.ttl
-        capability.expires_at = new Date(meta.created_at + meta.ttl * 1000).toISOString()
-      }
-
-      allCapabilities.push(capability)
-    }
-
-    // If mode=find but no q → treat as explore
-    const effectiveMode = (mode === 'find' && !q) ? 'explore' : mode
-
-    let items: QueryItem[]
 
     if (!q) {
       // No query — explore mode: sort by created_at descending, return summaries
-      const sorted = [...allCapabilities].sort((a, b) => b.created_at - a.created_at)
-      items = sorted.map(cap => ({
+      const allCapabilities: Capability[] = []
+
+      for (const cap of caps) {
+        const meta = await this.kv.getMeta(cap)
+        const lru = await this.kv.getLru(cap)
+        if (!meta || !lru) continue
+
+        const capability: Capability = {
+          capability: cap,
+          type: meta.type,
+          deployed: lru.deployed,
+          last_access: lru.last_access,
+          access_count: lru.access_count,
+          created_at: meta.created_at,
+          description: meta.description,
+          tags: meta.tags,
+          examples: meta.examples,
+        }
+
+        if (meta.ttl !== undefined) {
+          capability.ttl = meta.ttl
+          capability.expires_at = new Date(meta.created_at + meta.ttl * 1000).toISOString()
+        }
+
+        allCapabilities.push(capability)
+      }
+
+      const sorted = allCapabilities.sort((a, b) => b.created_at - a.created_at)
+      const items: QueryItem[] = sorted.map(cap => ({
         capability: cap.capability,
         description: cap.description,
         type: cap.type,
         score: 1.0,
       }))
-    } else {
-      // Score and filter
-      const scored = allCapabilities
-        .map(cap => ({ cap, score: scoreCapability(cap, q) }))
-        .filter(({ score }) => score > 0)
-        .sort((a, b) => b.score - a.score)
 
-      if (effectiveMode === 'find') {
-        items = scored.map(({ cap, score }) => ({
-          capability: cap.capability,
-          description: cap.description,
-          tags: cap.tags,
-          examples: cap.examples,
-          type: cap.type,
-          deployed: cap.deployed,
-          access_count: cap.access_count,
-          score,
-        }))
+      const offset = cursor ? parseInt(cursor, 10) : 0
+      const total = items.length
+      const paged = items.slice(offset, offset + limit)
+
+      return { total, items: paged }
+    }
+
+    // Has query — try embedding search
+    // Get query embedding
+    const queryVec = await this.embeddingService.embedQuery(q)
+
+    // Load all capabilities with their embeddings
+    const embeddingCandidates: Array<{
+      capability: string
+      vector: number[]
+      meta: any
+      lru: any
+    }> = []
+    const fallbackCandidates: Capability[] = []
+
+    for (const cap of caps) {
+      const vector = await this.kv.getEmbedding(cap)
+      const meta = await this.kv.getMeta(cap)
+      const lru = await this.kv.getLru(cap)
+      if (!meta || !lru) continue
+
+      if (vector) {
+        // Has embedding — use semantic search
+        embeddingCandidates.push({ capability: cap, vector, meta, lru })
       } else {
-        // explore: build summary items then apply dedup
-        const summaryItems: QueryItem[] = scored.map(({ cap, score }) => ({
-          capability: cap.capability,
-          description: cap.description,
-          tags: cap.tags,   // keep tags for dedup logic, stripped later
-          type: cap.type,
-          score,
-        }))
-
-        const deduped = applyExploreDedup(summaryItems)
-          .sort((a, b) => b.score - a.score)
-
-        // Strip tags/examples from explore output (only capability/description/type/score)
-        items = deduped.map(({ capability, description, type, score }) => ({
-          capability,
-          description,
-          type,
-          score,
-        }))
+        // No embedding (old data) — fallback to string matching
+        fallbackCandidates.push({
+          capability: cap,
+          type: meta.type,
+          deployed: lru.deployed,
+          last_access: lru.last_access,
+          access_count: lru.access_count,
+          created_at: meta.created_at,
+          description: meta.description,
+          tags: meta.tags,
+          examples: meta.examples,
+        })
       }
     }
 
-    // Apply cursor (offset-based paging)
-    const offset = cursor ? parseInt(cursor, 10) : 0
-    const total = items.length
-    const paged = items.slice(offset, offset + limit)
+    // Fallback: string.includes for old capabilities without embeddings
+    const qLower = q.toLowerCase()
+    const fallbackItems: QueryItem[] = fallbackCandidates
+      .filter(cap => {
+        return (
+          cap.capability.toLowerCase().includes(qLower) ||
+          cap.description?.toLowerCase().includes(qLower) ||
+          cap.tags?.some(t => t.toLowerCase().includes(qLower))
+        )
+      })
+      .map(cap => ({
+        capability: cap.capability,
+        description: cap.description,
+        tags: cap.tags,
+        examples: cap.examples,
+        type: cap.type,
+        deployed: cap.deployed,
+        access_count: cap.access_count,
+        score: 0.5,  // Default score for fallback
+      }))
 
-    return { total, items: paged }
+    const effectiveMode = (mode === 'find' && !q) ? 'explore' : mode
+
+    if (effectiveMode === 'find') {
+      // Cosine similarity top-K
+      const scored = embeddingCandidates
+        .map(c => ({
+          ...c,
+          score: cosineSimilarity(queryVec, c.vector),
+        }))
+        .filter(c => c.score > 0.3)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+
+      const embeddingItems: QueryItem[] = scored.map(c => ({
+        capability: c.capability,
+        description: c.meta.description,
+        tags: c.meta.tags,
+        examples: c.meta.examples,
+        type: c.meta.type,
+        deployed: c.lru.deployed,
+        access_count: c.lru.access_count,
+        score: Math.round(c.score * 1000) / 1000,
+      }))
+
+      // Merge embedding results with fallback results (embedding takes priority)
+      const embeddingCaps = new Set(embeddingItems.map(i => i.capability))
+      const fallbackOnly = fallbackItems.filter(i => !embeddingCaps.has(i.capability))
+      const items = [...embeddingItems, ...fallbackOnly]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+
+      const offset = cursor ? parseInt(cursor, 10) : 0
+      const total = items.length
+      return { total, items: items.slice(offset, offset + limit) }
+    } else {
+      // MMR for explore
+      const results = mmrSelect(queryVec, embeddingCandidates, limit, 0.5)
+
+      const embeddingItems: QueryItem[] = results
+        .filter(r => r.score > 0.2)
+        .map(r => ({
+          capability: r.capability,
+          description: r.meta.description,
+          type: r.meta.type,
+          score: Math.round(r.score * 1000) / 1000,
+        }))
+
+      // Merge with fallback
+      const embeddingCaps = new Set(embeddingItems.map(i => i.capability))
+      const fallbackOnly = fallbackItems
+        .filter(i => !embeddingCaps.has(i.capability))
+        .map(({ capability, description, type, score }) => ({ capability, description, type, score }))
+
+      const items = [...embeddingItems, ...fallbackOnly]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+
+      const offset = cursor ? parseInt(cursor, 10) : 0
+      const total = items.length
+      return { total, items: items.slice(offset, offset + limit) }
+    }
   }
 
   async inspect(capabilityName: string): Promise<Capability | null> {

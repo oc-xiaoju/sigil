@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi } from './setup.js'
+import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { KvStore } from '../src/kv.js'
 import { CONFIG } from '../src/config.js'
@@ -7,6 +7,7 @@ import { CONFIG } from '../src/config.js'
 describe('S4: 配额满时换出', () => {
   let mockKv: KVNamespace
   let mockCf: ReturnType<typeof createMockCfApi>
+  let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let kv: KvStore
 
@@ -15,7 +16,8 @@ describe('S4: 配额满时换出', () => {
     mockCf = createMockCfApi({
       invokeResponse: () => new Response('ok', { status: 200 }),
     })
-    pool = new WorkerPool(mockKv, mockCf.cfApi)
+    mockEmbed = new MockEmbeddingService()
+    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
   })
 

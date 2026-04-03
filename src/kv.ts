@@ -137,6 +137,19 @@ export class KvStore {
     await this.kv.put('stats:last_deploy_time', JSON.stringify({ time }))
   }
 
+  // embed:{capability} — capability embedding vector
+  async getEmbedding(capability: string): Promise<number[] | null> {
+    return await this.kv.get(`embed:${capability}`, 'json') as number[] | null
+  }
+
+  async setEmbedding(capability: string, vector: number[]): Promise<void> {
+    await this.kv.put(`embed:${capability}`, JSON.stringify(vector))
+  }
+
+  async deleteEmbedding(capability: string): Promise<void> {
+    await this.kv.delete(`embed:${capability}`)
+  }
+
   // List all capabilities by prefix scanning
   async listCapabilities(): Promise<string[]> {
     const list = await this.kv.list({ prefix: 'lru:' })

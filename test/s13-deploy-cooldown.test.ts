@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, makeRequest } from './setup.js'
+import { createMockKv, createMockCfApi, makeRequest, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { AuthModule } from '../src/auth.js'
 import { KvStore } from '../src/kv.js'
@@ -8,6 +8,7 @@ import { handleRequest } from '../src/router.js'
 describe('S13: deploy_cooldown', () => {
   let mockKv: KVNamespace
   let mockCf: ReturnType<typeof createMockCfApi>
+  let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let auth: AuthModule
   let kv: KvStore
@@ -15,7 +16,8 @@ describe('S13: deploy_cooldown', () => {
   beforeEach(async () => {
     mockKv = createMockKv()
     mockCf = createMockCfApi()
-    pool = new WorkerPool(mockKv, mockCf.cfApi)
+    mockEmbed = new MockEmbeddingService()
+    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 

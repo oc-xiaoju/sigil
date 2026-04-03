@@ -1,16 +1,18 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi } from './setup.js'
+import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 
 describe('S5: 调用不存在的能力', () => {
   let mockKv: KVNamespace
   let mockCf: ReturnType<typeof createMockCfApi>
+  let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
 
   beforeEach(() => {
     mockKv = createMockKv()
     mockCf = createMockCfApi()
-    pool = new WorkerPool(mockKv, mockCf.cfApi)
+    mockEmbed = new MockEmbeddingService()
+    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
   })
 
   it('should return 404 for nonexistent capability', async () => {

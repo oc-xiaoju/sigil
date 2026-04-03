@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi } from './setup.js'
+import { createMockKv, createMockCfApi, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { KvStore } from '../src/kv.js'
 
 describe('S11: 并发换入去重', () => {
   let mockKv: KVNamespace
   let mockCf: ReturnType<typeof createMockCfApi>
+  let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let kv: KvStore
 
@@ -14,7 +15,8 @@ describe('S11: 并发换入去重', () => {
     mockCf = createMockCfApi({
       invokeResponse: () => new Response('pong', { status: 200 }),
     })
-    pool = new WorkerPool(mockKv, mockCf.cfApi)
+    mockEmbed = new MockEmbeddingService()
+    pool = new WorkerPool(mockKv, mockCf.cfApi, mockEmbed as any)
     kv = new KvStore(mockKv)
 
     // Simulate evicted capability: code in KV but not deployed
