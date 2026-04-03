@@ -65,12 +65,18 @@ export function createCfApi(accountId: string, apiToken: string): CfApi {
     async invoke(workerName: string, request: Request): Promise<Response> {
       // 转发请求到 Worker 子域名
       const url = new URL(request.url)
-      const targetUrl = `https://${workerName}${CONFIG.SUBDOMAIN_SUFFIX}${url.pathname}${url.search}`
+      const targetUrl = `https://${workerName}${CONFIG.SUBDOMAIN_SUFFIX}${url.search}`
+
+      // Strip Host header so fetch() sets it correctly for the target URL.
+      // Also set redirect: 'follow' so 3xx responses are transparent.
+      const headers = new Headers(request.headers)
+      headers.delete('host')
 
       return fetch(targetUrl, {
         method: request.method,
-        headers: request.headers,
+        headers,
         body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
+        redirect: 'follow',
       })
     },
   }

@@ -48,7 +48,7 @@ export async function handleRequest(request: Request, env: RouterEnv): Promise<R
   const runMatch = path.match(/^\/run\/([^/]+)$/)
   if (runMatch) {
     const capability = runMatch[1]!
-    return handleInvoke(capability, request, env)
+    return handleInvoke(capability, request, env, url)
   }
 
   return jsonError(404, 'Not found')
@@ -173,9 +173,37 @@ async function handleInvoke(
   capability: string,
   request: Request,
   env: RouterEnv,
+  url: URL,
 ): Promise<Response> {
   try {
-    return await env.backend.invoke(capability, request)
+    // CF Workers cannot fetch() other workers on the same .workers.dev zone.
+    // We resolve the sub-worker URL and redirect the client instead.
+    const resolved = await env.backend.resolveInvoke(capability, request)
+
+    if ('error' in resolved) {
+      return jsonError(resolved.status, resolved.error)
+    }
+
+    // Build target URL: sub-worker subdomain + query params from original request
+    const targetUrl = `https://${resolved.subdomain}/${url.search}`
+
+    // Check if client wants a redirect or JSON pointer
+    const accept = request.headers.get('Accept') || ''
+    if (accept.includes('application/json') && !accept.includes('text/html')) {
+      // JSON-aware client: return invoke URL for the client to call directly
+      return jsonOk({
+        url: targetUrl,
+        capability,
+        cold_start: resolved.cold_start,
+      })
+    }
+
+    // Default: 302 redirect to the sub-worker
+    const headers = new Headers({ Location: targetUrl })
+    if (resolved.cold_start) {
+      headers.set('X-Sigil-Cold-Start', 'true')
+    }
+    return new Response(null, { status: 302, headers })
   } catch (e) {
     if (e instanceof PageRateLimitError) {
       return jsonError(503, 'Page rate limit exceeded', { retry_after: e.retry_after })

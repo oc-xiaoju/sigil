@@ -1,10 +1,18 @@
 name = "sigil"
 main = "src/index.ts"
 compatibility_date = "2026-04-03"
+compatibility_flags = ["global_fetch_strictly_public"]
 
 [[kv_namespaces]]
 binding = "SIGIL_KV"
 id = "9943c8873e724b0fb2cf24b4475e5a52"
+
+# Dynamic Workers loader binding (open beta)
+# Allows Gateway Worker to load and execute sub-Worker code dynamically
+# without deploying independent scripts, avoiding Worker-to-Worker fetch
+# restrictions (error 1042) on workers.dev subdomains.
+[[worker_loaders]]
+binding = "LOADER"
 
 [ai]
 binding = "AI"
@@ -13,8 +21,8 @@ binding = "AI"
 SIGIL_ENV = "production"
 
 # Worker Secrets (set via `wrangler secret put`, never committed to source):
-#   CF_API_TOKEN   - Cloudflare API token with Workers:Edit permission
-#   CF_ACCOUNT_ID  - Cloudflare Account ID
+#   CF_API_TOKEN   - Cloudflare API token with Workers:Edit permission (optional, for legacy cleanup)
+#   CF_ACCOUNT_ID  - Cloudflare Account ID (optional, for legacy cleanup)
 #
 # To configure:
 #   echo "$CF_API_TOKEN" | npx wrangler secret put CF_API_TOKEN

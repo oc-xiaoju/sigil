@@ -1,6 +1,6 @@
-import type { SigilBackend, DeployParams, DeployResult, Capability, BackendStatus, QueryParams, QueryResult, QueryItem } from './types.js'
+import type { SigilBackend, DeployParams, DeployResult, Capability, BackendStatus, QueryParams, QueryResult, QueryItem, ResolveInvokeResult, ResolveInvokeError } from './types.js'
 import { KvStore } from '../kv.js'
-import { LruScheduler, PageRateLimitError } from '../lru.js'
+import { LruScheduler } from '../lru.js'
 import { CONFIG } from '../config.js'
 import { EmbeddingService, cosineSimilarity, mmrSelect } from '../embedding.js'
 
@@ -192,6 +192,43 @@ export class WorkerPool implements SigilBackend {
     }
 
     return await this.cfApi.invoke(route.worker_name, request)
+  }
+
+  async resolveInvoke(capabilityName: string, _request: Request): Promise<ResolveInvokeResult | ResolveInvokeError> {
+    const lru = await this.kv.getLru(capabilityName)
+    let coldStart = false
+
+    if (!lru) {
+      // Check if we have code (page-in scenario)
+      const code = await this.kv.getCode(capabilityName)
+      if (!code) {
+        return { error: 'Capability not found', status: 404 }
+      }
+      // Page in the worker
+      await this.doPageIn(capabilityName, code)
+      coldStart = true
+    } else if (!lru.deployed) {
+      const code = await this.kv.getCode(capabilityName)
+      if (!code) {
+        return { error: 'Capability not found', status: 404 }
+      }
+      await this.doPageIn(capabilityName, code)
+      coldStart = true
+    } else {
+      // Warm hit — update LRU
+      await this.kv.setLru(capabilityName, {
+        ...lru,
+        last_access: Date.now(),
+        access_count: lru.access_count + 1,
+      })
+    }
+
+    const route = await this.kv.getRoute(capabilityName)
+    if (!route) {
+      return { error: 'Route not found', status: 500 }
+    }
+
+    return { subdomain: route.subdomain, cold_start: coldStart }
   }
 
   private async doPageIn(capability: string, code: string): Promise<void> {

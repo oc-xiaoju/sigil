@@ -68,9 +68,20 @@ export interface BackendStatus {
   eviction_count: number
 }
 
+export interface ResolveInvokeResult {
+  subdomain: string         // e.g. "s-greet.shazhou.workers.dev"
+  cold_start: boolean
+}
+
+export interface ResolveInvokeError {
+  error: string
+  status: number
+}
+
 export interface SigilBackend {
   deploy(params: DeployParams): Promise<DeployResult>
   invoke(name: string, request: Request): Promise<Response>
+  resolveInvoke(name: string, request: Request): Promise<ResolveInvokeResult | ResolveInvokeError>
   remove(name: string): Promise<void>
   query(params: QueryParams): Promise<QueryResult>
   inspect(name: string): Promise<Capability | null>
