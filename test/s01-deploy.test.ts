@@ -56,7 +56,7 @@ describe('S1: 部署能力', () => {
     })
 
     // LOADER.get() should NOT be called during deploy — only during invoke
-    expect(mockLoader.loaderCalls()).toHaveLength(0)
+    expect(mockCf.invokeCalls()).toHaveLength(0)
   })
 
   it('should write KV entries (code, meta, lru)', async () => {
