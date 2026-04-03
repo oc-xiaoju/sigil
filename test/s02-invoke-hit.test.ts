@@ -1,0 +1,56 @@
+import { describe, it, expect, beforeEach } from 'vitest'
+import { createMockKv, createMockCfApi } from './setup.js'
+import { WorkerPool } from '../src/backend/worker-pool.js'
+import { KvStore } from '../src/kv.js'
+
+describe('S2: 调用已部署能力（命中）', () => {
+  let mockKv: KVNamespace
+  let mockCf: ReturnType<typeof createMockCfApi>
+  let pool: WorkerPool
+  let kv: KvStore
+
+  beforeEach(async () => {
+    mockKv = createMockKv()
+    mockCf = createMockCfApi({
+      invokeResponse: (_workerName, _req) => new Response('pong', { status: 200 }),
+    })
+    pool = new WorkerPool(mockKv, mockCf.cfApi)
+    kv = new KvStore(mockKv)
+
+    // Deploy first
+    await pool.deploy({
+      agent: 'xiaoju',
+      name: 'ping',
+      code: "export default { fetch() { return new Response('pong') } }",
+      type: 'normal',
+    })
+    mockCf.reset()
+  })
+
+  it('should invoke warm capability', async () => {
+    const req = new Request('https://sigil.shazhou.workers.dev/xiaoju/ping')
+    const resp = await pool.invoke('xiaoju--ping', req)
+    expect(resp.status).toBe(200)
+    expect(await resp.text()).toBe('pong')
+  })
+
+  it('should update lru.last_access on warm hit', async () => {
+    const lruBefore = await kv.getLru('xiaoju--ping')
+    const accessBefore = lruBefore!.last_access
+
+    await new Promise(r => setTimeout(r, 5))
+
+    const req = new Request('https://sigil.shazhou.workers.dev/xiaoju/ping')
+    await pool.invoke('xiaoju--ping', req)
+
+    const lruAfter = await kv.getLru('xiaoju--ping')
+    expect(lruAfter!.last_access).toBeGreaterThan(accessBefore)
+    expect(lruAfter!.access_count).toBe(1)
+  })
+
+  it('should NOT call deployWorker on warm hit', async () => {
+    const req = new Request('https://sigil.shazhou.workers.dev/xiaoju/ping')
+    await pool.invoke('xiaoju--ping', req)
+    expect(mockCf.deployCalls()).toHaveLength(0)
+  })
+})
