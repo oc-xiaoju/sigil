@@ -85,8 +85,9 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
       return jsonError(400, 'Must specify either code or schema+execute')
     }
 
-    let code: string
+    let code: string | undefined
     let schema: InputSchema | undefined
+    let execute: string | undefined
 
     if (body.code) {
       code = body.code
@@ -95,7 +96,8 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
         return jsonError(400, 'execute is required when using schema mode')
       }
       schema = body.schema || { type: 'object', properties: {} }
-      code = generateWorkerCode(schema, body.execute)
+      execute = body.execute
+      // Don't codegen here — let backend handle it (supports AMD requires)
     }
 
     // Check deploy cooldown
@@ -104,6 +106,7 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
     const result = await env.backend.deploy({
       name: body.name,
       code,
+      execute,
       schema,
       type: body.type,
       ttl: body.ttl,

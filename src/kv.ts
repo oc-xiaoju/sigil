@@ -16,6 +16,7 @@ export interface KvMetaValue {
   examples?: string[]
   schema?: InputSchema
   requires?: string[]
+  execute?: string  // original execute body, stored for AMD dependency resolution
 }
 
 export interface KvLruValue {

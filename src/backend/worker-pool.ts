@@ -71,18 +71,17 @@ export class WorkerPool implements SigilBackend {
         Object.assign(deps, nestedDeps)
       }
 
-      // 对于 schema+execute 模式的依赖，从 code 中提取 execute body
+      // Use stored execute body if available, fall back to extraction from code
+      const executeBody = depMeta.execute || this.extractExecuteBodyFromWorkerCode(depCode)
+
       if (depMeta.schema) {
-        // 从生成的 worker code 中提取用户的 execute body
-        // 这个比较 hacky，实际应该存储原始的 execute body
-        // 但为了兼容现有代码，我们从生成的代码中反向提取
         deps[depName] = {
-          code: this.extractExecuteBodyFromWorkerCode(depCode),
+          code: executeBody,
           schema: depMeta.schema
         }
-      } else {
-        // 完整代码模式，直接使用
-        deps[depName] = { code: depCode }
+            } else {
+        // Code mode or no schema — use stored execute or full code
+        deps[depName] = { code: depMeta.execute || depCode }
       }
     }
 
@@ -169,6 +168,7 @@ export class WorkerPool implements SigilBackend {
     await this.kv.setCode(capability, finalCode)
     await this.kv.setMeta(capability, {
       type, ttl, created_at: now, bindings, description, tags, examples, schema, requires,
+      execute: execute || undefined,
     })
     await this.kv.setLru(capability, { last_access: now, access_count: 0, deployed: true })
     await this.kv.setRoute(capability, { worker_name: capability, subdomain: '' })
