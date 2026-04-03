@@ -1,5 +1,5 @@
 export const CONFIG = {
-  MAX_SLOTS: 10,           // 测试用小值，生产 ~400
+  MAX_SLOTS: 3,            // LRU 验证用，生产 ~400
   MAX_AGENTS: 8,
   DEPLOY_COOLDOWN_MS: 5000,
   PAGE_RATE_LIMIT: 10,     // 次/分钟

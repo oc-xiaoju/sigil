@@ -56,25 +56,29 @@ export class WorkerPool implements SigilBackend {
     const workerName = this.getWorkerName(capability)
     const now = Date.now()
 
-    // Check if we need to evict
-    const deployed = await this.lru.countDeployed()
-    let evictedCapability: string | undefined
+    // Check if we need to evict (loop handles KV eventual-consistency skew)
+    let deployed = await this.lru.countDeployed()
+    const evictedCapabilities: string[] = []
 
-    if (deployed >= this.config.MAX_SLOTS) {
+    while (deployed >= this.config.MAX_SLOTS) {
       const candidate = await this.lru.findEvictionCandidate()
-      if (candidate) {
-        evictedCapability = candidate.capability
-        const route = await this.kv.getRoute(candidate.capability)
-        if (route) {
-          await this.cfApi.deleteWorker(route.worker_name)
-        }
-        await this.kv.setLru(candidate.capability, {
-          ...(await this.kv.getLru(candidate.capability))!,
-          deployed: false,
-        })
-        await this.kv.incrementEvictionCount()
+      if (!candidate) break // nothing evictable
+
+      evictedCapabilities.push(candidate.capability)
+      const route = await this.kv.getRoute(candidate.capability)
+      if (route) {
+        await this.cfApi.deleteWorker(route.worker_name)
       }
+      await this.kv.setLru(candidate.capability, {
+        ...(await this.kv.getLru(candidate.capability))!,
+        deployed: false,
+      })
+      await this.kv.incrementEvictionCount()
+
+      deployed = await this.lru.countDeployed()
     }
+
+    const evictedCapability = evictedCapabilities[0]
 
     // Deploy the worker
     await this.cfApi.deployWorker(workerName, code)
@@ -167,27 +171,30 @@ export class WorkerPool implements SigilBackend {
   }
 
   private async doPageIn(capability: string, code: string): Promise<void> {
-    // Check rate limit
+    // Check rate limit BEFORE eviction/deployment
     await this.lru.checkPageRate()
 
-    // Check if eviction needed
-    const deployed = await this.lru.countDeployed()
-    if (deployed >= this.config.MAX_SLOTS) {
+    // Evict until we have a free slot (loop handles KV eventual-consistency skew)
+    let deployed = await this.lru.countDeployed()
+    while (deployed >= this.config.MAX_SLOTS) {
       const candidate = await this.lru.findEvictionCandidate()
-      if (candidate) {
-        const route = await this.kv.getRoute(candidate.capability)
-        if (route) {
-          await this.cfApi.deleteWorker(route.worker_name)
-        }
-        const existingLru = await this.kv.getLru(candidate.capability)
-        if (existingLru) {
-          await this.kv.setLru(candidate.capability, {
-            ...existingLru,
-            deployed: false,
-          })
-        }
-        await this.kv.incrementEvictionCount()
+      if (!candidate) break // no evictable candidate — proceed anyway
+
+      const route = await this.kv.getRoute(candidate.capability)
+      if (route) {
+        await this.cfApi.deleteWorker(route.worker_name)
       }
+      const existingLru = await this.kv.getLru(candidate.capability)
+      if (existingLru) {
+        await this.kv.setLru(candidate.capability, {
+          ...existingLru,
+          deployed: false,
+        })
+      }
+      await this.kv.incrementEvictionCount()
+
+      // Re-count after eviction so the while condition is accurate
+      deployed = await this.lru.countDeployed()
     }
 
     const workerName = this.getWorkerName(capability)
@@ -353,7 +360,7 @@ export class WorkerPool implements SigilBackend {
     return {
       backend: 'worker-pool',
       total_slots: this.config.MAX_SLOTS,
-      used_slots: usedSlots,
+      used_slots: Math.min(usedSlots, this.config.MAX_SLOTS),
       agents: agentSet.size,
       lru_enabled: true,
       eviction_count: evictionCount,

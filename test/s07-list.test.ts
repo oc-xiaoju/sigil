@@ -22,8 +22,8 @@ describe('S7: 列出能力', () => {
     await auth.registerAgent('xiaoju', 'token-xiaoju')
     await auth.registerAgent('xiaomooo', 'token-xiaomooo')
 
-    // Deploy 3 for xiaoju
-    for (const name of ['ping', 'echo', 'calc']) {
+    // Deploy 2 for xiaoju (keep total <= MAX_SLOTS=3 to avoid eviction)
+    for (const name of ['ping', 'echo']) {
       await pool.deploy({
         agent: 'xiaoju',
         name,
@@ -32,7 +32,7 @@ describe('S7: 列出能力', () => {
       })
     }
 
-    // Deploy 1 for xiaomooo
+    // Deploy 1 for xiaomooo (total = 3, exactly fills slots)
     await pool.deploy({
       agent: 'xiaomooo',
       name: 'hello',
@@ -50,18 +50,17 @@ describe('S7: 列出能力', () => {
     expect(resp.status).toBe(200)
 
     const body = await resp.json() as { capabilities: Array<{ capability: string }> }
-    expect(body.capabilities).toHaveLength(3)
+    expect(body.capabilities).toHaveLength(2)
 
     const names = body.capabilities.map(c => c.capability)
     expect(names).toContain('xiaoju--ping')
     expect(names).toContain('xiaoju--echo')
-    expect(names).toContain('xiaoju--calc')
     expect(names).not.toContain('xiaomooo--hello')
   })
 
   it('should include capability metadata in response', async () => {
     const caps = await pool.list('xiaoju')
-    expect(caps.length).toBe(3)
+    expect(caps.length).toBe(2)
     for (const cap of caps) {
       expect(cap.agent).toBe('xiaoju')
       expect(cap.type).toBe('normal')
