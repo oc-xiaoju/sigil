@@ -1,3 +1,7 @@
+// Refactored: removed CfApi interface (CF API no longer used for deploy/invoke).
+// Removed ResolveInvoke types (302 redirect workaround no longer needed).
+// invoke() now executes directly via Dynamic Workers.
+
 import type { InputSchema } from '../codegen.js'
 
 export interface DeployParams {
@@ -14,7 +18,7 @@ export interface DeployParams {
 }
 
 export interface DeployResult {
-  capability: string        // 直接就是 name，如 "ping"
+  capability: string
   url: string
   expires_at?: string
   cold_start: boolean
@@ -22,7 +26,7 @@ export interface DeployResult {
 }
 
 export interface Capability {
-  capability: string        // 直接就是 name，如 "ping"
+  capability: string
   type: 'persistent' | 'normal' | 'ephemeral'
   deployed: boolean
   last_access: number
@@ -33,7 +37,7 @@ export interface Capability {
   description?: string
   tags?: string[]
   examples?: string[]
-  schema?: InputSchema      // 新增：find 模式返回，让 Agent 知道怎么调用
+  schema?: InputSchema
 }
 
 export interface QueryParams {
@@ -52,7 +56,7 @@ export interface QueryItem {
   deployed?: boolean
   access_count?: number
   score: number
-  schema?: InputSchema      // 新增：find 模式返回
+  schema?: InputSchema
 }
 
 export interface QueryResult {

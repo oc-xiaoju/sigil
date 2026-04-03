@@ -6,8 +6,8 @@ import { EmbeddingService } from './embedding.js'
 
 export interface Env {
   SIGIL_KV: KVNamespace
-  AI: any       // Cloudflare Workers AI binding
-  LOADER: any   // Dynamic Workers loader binding
+  AI: any  // Cloudflare Workers AI binding
+  LOADER: any  // Dynamic Workers Loader binding (worker_loaders)
 }
 
 export default {

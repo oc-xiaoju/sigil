@@ -112,7 +112,7 @@ describe('Query API', () => {
     // Re-deploy with the new overrides in place
     const mockKv2 = createMockKv()
     const mockLoader2 = createMockLoader()
-    const pool2 = new WorkerPool(mockKv2, mockCf2.loader, mockEmbed as any)
+    const pool2 = new WorkerPool(mockKv2, mockLoader2.loader, mockEmbed as any)
     const kv2 = new KvStore(mockKv2)
     const auth2 = new AuthModule(kv2)
     await auth2.setToken('deploy-token')

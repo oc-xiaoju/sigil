@@ -32,7 +32,7 @@ describe('S6: 删除能力', () => {
     mockLoader.reset()
   })
 
-  it('should NOT call CF API deleteWorker (Dynamic Workers; KV cleanup only)', async () => {
+  it('should clear all KV entries (Dynamic Workers: no CF API deleteWorker needed)', async () => {
     const req = makeRequest('DELETE', '/_api/remove', {
       token: 'deploy-token',
       body: { capability: 'ping' },
@@ -40,7 +40,13 @@ describe('S6: 删除能力', () => {
 
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     expect(resp.status).toBe(200)
-    // LOADER should not be called during remove
+
+    // All KV entries should be gone
+    expect(await kv.getCode('ping')).toBeNull()
+    expect(await kv.getMeta('ping')).toBeNull()
+    expect(await kv.getLru('ping')).toBeNull()
+
+    // No LOADER.get() calls during remove
     expect(mockLoader.loaderCalls()).toHaveLength(0)
   })
 
@@ -50,7 +56,6 @@ describe('S6: 删除能力', () => {
     expect(await kv.getCode('ping')).toBeNull()
     expect(await kv.getMeta('ping')).toBeNull()
     expect(await kv.getLru('ping')).toBeNull()
-    expect(await kv.getRoute('ping')).toBeNull()
   })
 
   it('should return removed capability in response', async () => {

@@ -43,7 +43,7 @@ export async function handleRequest(request: Request, env: RouterEnv): Promise<R
     return handleInspect(capability, env)
   }
 
-  // GET/POST /run/{capability} — invoke (no auth required)
+  // GET /run/{capability} — invoke (no auth required)
   const runMatch = path.match(/^\/run\/([^/]+)$/)
   if (runMatch) {
     const capability = runMatch[1]!
@@ -88,10 +88,8 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
     let schema: InputSchema | undefined
 
     if (body.code) {
-      // Mode A: deploy raw code
       code = body.code
     } else {
-      // Mode B: schema + execute
       if (!body.execute) {
         return jsonError(400, 'execute is required when using schema mode')
       }
@@ -173,6 +171,7 @@ async function handleInvoke(
   request: Request,
   env: RouterEnv,
 ): Promise<Response> {
+  // Direct invocation via Dynamic Workers — no redirect, no sub-worker fetch
   return await env.backend.invoke(capability, request)
 }
 

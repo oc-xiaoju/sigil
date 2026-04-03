@@ -7,7 +7,7 @@ import { handleRequest } from '../src/router.js'
 
 describe('S8: 健康端点', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockLoader>
+  let mockLoader: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let auth: AuthModule
@@ -15,7 +15,7 @@ describe('S8: 健康端点', () => {
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockLoader()
+    mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
     pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
