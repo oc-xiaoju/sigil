@@ -43,7 +43,7 @@ describe('S7: 列出能力（已迁移至 query 接口）', () => {
   })
 
   it('/_api/query should return all capabilities (explore mode)', async () => {
-    const req = makeRequest('GET', '/_api/query')
+    const req = makeRequest('GET', '/_api/query', { token: 'deploy-token' })
 
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     expect(resp.status).toBe(200)

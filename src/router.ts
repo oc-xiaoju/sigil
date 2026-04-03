@@ -31,7 +31,7 @@ export async function handleRequest(request: Request, env: RouterEnv): Promise<R
     return handleRemove(request, env)
   }
 
-  // GET /_api/query — public, no auth
+  // GET /_api/query
   if (method === 'GET' && path === '/_api/query') {
     return handleQuery(request, env)
   }
@@ -40,10 +40,10 @@ export async function handleRequest(request: Request, env: RouterEnv): Promise<R
   const inspectMatch = path.match(/^\/_api\/inspect\/(.+)$/)
   if (method === 'GET' && inspectMatch) {
     const capability = inspectMatch[1]!
-    return handleInspect(capability, env)
+    return handleInspect(capability, request, env)
   }
 
-  // GET /run/{capability} — invoke (no auth required)
+  // /run/{capability} — invoke
   const runMatch = path.match(/^\/run\/([^/]+)$/)
   if (runMatch) {
     const capability = runMatch[1]!
@@ -146,24 +146,44 @@ async function handleRemove(request: Request, env: RouterEnv): Promise<Response>
 }
 
 async function handleQuery(request: Request, env: RouterEnv): Promise<Response> {
-  const url = new URL(request.url)
-  const q = url.searchParams.get('q') ?? undefined
-  const modeRaw = url.searchParams.get('mode')
-  const mode = (modeRaw === 'find' || modeRaw === 'explore') ? modeRaw : undefined
-  const limitRaw = url.searchParams.get('limit')
-  const limit = limitRaw ? parseInt(limitRaw, 10) : undefined
-  const cursor = url.searchParams.get('cursor') ?? undefined
+  try {
+    const authHeader = request.headers.get('Authorization')
+    await env.auth.validateToken(authHeader)
 
-  const result = await env.backend.query({ q, mode, limit, cursor })
-  return jsonOk(result)
+    const url = new URL(request.url)
+    const q = url.searchParams.get('q') ?? undefined
+    const modeRaw = url.searchParams.get('mode')
+    const mode = (modeRaw === 'find' || modeRaw === 'explore') ? modeRaw : undefined
+    const limitRaw = url.searchParams.get('limit')
+    const limit = limitRaw ? parseInt(limitRaw, 10) : undefined
+    const cursor = url.searchParams.get('cursor') ?? undefined
+
+    const result = await env.backend.query({ q, mode, limit, cursor })
+    return jsonOk(result)
+  } catch (e) {
+    if (e instanceof AuthError) {
+      return jsonError(e.status, e.message)
+    }
+    throw e
+  }
 }
 
-async function handleInspect(capability: string, env: RouterEnv): Promise<Response> {
-  const result = await env.backend.inspect(capability)
-  if (!result) {
-    return jsonError(404, 'Capability not found')
+async function handleInspect(capability: string, request: Request, env: RouterEnv): Promise<Response> {
+  try {
+    const authHeader = request.headers.get('Authorization')
+    await env.auth.validateToken(authHeader)
+
+    const result = await env.backend.inspect(capability)
+    if (!result) {
+      return jsonError(404, 'Capability not found')
+    }
+    return jsonOk(result)
+  } catch (e) {
+    if (e instanceof AuthError) {
+      return jsonError(e.status, e.message)
+    }
+    throw e
   }
-  return jsonOk(result)
 }
 
 async function handleInvoke(
@@ -171,8 +191,17 @@ async function handleInvoke(
   request: Request,
   env: RouterEnv,
 ): Promise<Response> {
-  // Direct invocation via Dynamic Workers — no redirect, no sub-worker fetch
-  return await env.backend.invoke(capability, request)
+  try {
+    const authHeader = request.headers.get('Authorization')
+    await env.auth.validateToken(authHeader)
+
+    return await env.backend.invoke(capability, request)
+  } catch (e) {
+    if (e instanceof AuthError) {
+      return jsonError(e.status, e.message)
+    }
+    throw e
+  }
 }
 
 function jsonOk(body: unknown, status = 200): Response {

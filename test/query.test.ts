@@ -54,7 +54,7 @@ describe('Query API', () => {
 
   // Test 1: 无参数 query → explore 模式，全量摘要（不用 embedding）
   it('无参数 query → 返回全部能力（explore 摘要格式）', async () => {
-    const req = makeRequest('GET', '/_api/query')
+    const req = makeRequest('GET', '/_api/query', { token: 'deploy-token' })
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     expect(resp.status).toBe(200)
 
@@ -273,18 +273,18 @@ describe('Query API', () => {
   })
 
   it('limit via URL query string', async () => {
-    const req = makeRequest('GET', '/_api/query?limit=2')
+    const req = makeRequest('GET', '/_api/query?limit=2', { token: 'deploy-token' })
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     const body = await resp.json() as { total: number; items: unknown[] }
     expect(body.items).toHaveLength(2)
     expect(body.total).toBe(3)
   })
 
-  // Test 11: query 不需要 auth token
-  it('query 接口公开，不需要 token', async () => {
+  // Test 11: query 需要 auth token
+  it('query 接口需要 token', async () => {
     const req = makeRequest('GET', '/_api/query')
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
-    expect(resp.status).toBe(200)
+    expect(resp.status).toBe(401)
   })
 
   // Test 12: deploy metadata 存储并在 query 中可读
