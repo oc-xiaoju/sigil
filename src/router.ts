@@ -2,6 +2,8 @@ import type { SigilBackend } from './backend/types.js'
 import { AuthModule, AuthError, DeployCooldownError } from './auth.js'
 import { KvStore } from './kv.js'
 import { PageRateLimitError } from './lru.js'
+import { generateWorkerCode } from './codegen.js'
+import type { InputSchema } from './codegen.js'
 
 export interface RouterEnv {
   SIGIL_KV: KVNamespace
@@ -64,7 +66,9 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
 
     const body = await request.json() as {
       name: string | null
-      code: string
+      code?: string
+      schema?: InputSchema
+      execute?: string
       type: 'persistent' | 'normal' | 'ephemeral'
       ttl?: number
       bindings?: string[]
@@ -73,12 +77,36 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
       examples?: string[]
     }
 
+    // Route validation
+    if (body.code && (body.schema || body.execute)) {
+      return jsonError(400, 'Cannot specify both code and schema/execute')
+    }
+    if (!body.code && !body.execute) {
+      return jsonError(400, 'Must specify either code or schema+execute')
+    }
+
+    let code: string
+    let schema: InputSchema | undefined
+
+    if (body.code) {
+      // 模式 A：直接部署
+      code = body.code
+    } else {
+      // 模式 B：schema + execute
+      if (!body.execute) {
+        return jsonError(400, 'execute is required when using schema mode')
+      }
+      schema = body.schema || { type: 'object', properties: {} }
+      code = generateWorkerCode(schema, body.execute)
+    }
+
     // Check deploy cooldown
     await env.auth.checkDeployCooldown()
 
     const result = await env.backend.deploy({
       name: body.name,
-      code: body.code,
+      code,
+      schema,
       type: body.type,
       ttl: body.ttl,
       bindings: body.bindings,

@@ -1,6 +1,10 @@
+import type { InputSchema } from '../codegen.js'
+
 export interface DeployParams {
   name: string | null       // null = 自动生成 t-{hash}
-  code: string
+  code?: string             // 模式 A：完整 Worker 代码
+  schema?: InputSchema      // 模式 B：输入 schema
+  execute?: string          // 模式 B：函数体
   type: 'persistent' | 'normal' | 'ephemeral'
   ttl?: number              // 秒，仅 ephemeral
   bindings?: string[]
@@ -29,6 +33,7 @@ export interface Capability {
   description?: string
   tags?: string[]
   examples?: string[]
+  schema?: InputSchema      // 新增：find 模式返回，让 Agent 知道怎么调用
 }
 
 export interface QueryParams {
@@ -47,6 +52,7 @@ export interface QueryItem {
   deployed?: boolean
   access_count?: number
   score: number
+  schema?: InputSchema      // 新增：find 模式返回
 }
 
 export interface QueryResult {

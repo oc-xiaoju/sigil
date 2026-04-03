@@ -331,4 +331,44 @@ describe('Query API', () => {
       expect(Math.abs(item.score - rounded)).toBeLessThan(0.0001)
     }
   })
+
+  // Test 15: find 模式返回 schema（如果有）
+  it('find 模式返回 schema 字段（via fallback path）', async () => {
+    const now = Date.now()
+    const kv2 = new KvStore(mockKv)
+    const testSchema = {
+      type: 'object' as const,
+      properties: {
+        from: { type: 'string', description: 'Source currency' },
+        to: { type: 'string', description: 'Target currency' },
+      },
+      required: ['from', 'to'],
+    }
+
+    // Insert capability with schema manually (simulating schema+execute deploy)
+    await kv2.setMeta('schema-cap', {
+      type: 'persistent',
+      created_at: now,
+      description: 'schema capability for testing',
+      tags: ['schema-test'],
+      schema: testSchema,
+    })
+    await kv2.setLru('schema-cap', { last_access: now, access_count: 0, deployed: true })
+
+    const result = await pool.query({ q: 'schema-test', mode: 'find' })
+    const item = result.items.find(i => i.capability === 'schema-cap')
+    expect(item).toBeDefined()
+    expect(item!.schema).toBeDefined()
+    expect(item!.schema?.properties.from.type).toBe('string')
+    expect(item!.schema?.required).toContain('from')
+    expect(item!.schema?.required).toContain('to')
+  })
+
+  // Test 16: explore 模式不返回 schema
+  it('explore 模式不返回 schema 字段', async () => {
+    const result = await pool.query({ mode: 'explore' })
+    for (const item of result.items) {
+      expect(item).not.toHaveProperty('schema')
+    }
+  })
 })

@@ -78,4 +78,121 @@ describe('S1: 部署能力', () => {
     const route = await kv.getRoute('ping')
     expect(route?.worker_name).toBe('s-ping')
   })
+
+  // --- 模式 B: schema + execute ---
+
+  it('模式 B: schema + execute 通过 API 部署', async () => {
+    const req = makeRequest('POST', '/_api/deploy', {
+      token: 'deploy-token',
+      body: {
+        name: 'adder',
+        type: 'normal',
+        schema: {
+          type: 'object',
+          properties: {
+            a: { type: 'number', description: 'First number' },
+            b: { type: 'number', description: 'Second number' },
+          },
+          required: ['a', 'b'],
+        },
+        execute: 'return JSON.stringify({ sum: input.a + input.b })',
+      },
+    })
+
+    const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+    expect(resp.status).toBe(201)
+
+    const body = await resp.json() as { capability: string; url: string }
+    expect(body.capability).toBe('adder')
+    expect(body.url).toBe('https://sigil.shazhou.workers.dev/run/adder')
+  })
+
+  it('模式 B: 生成的 code 存入 KV（包含 export default）', async () => {
+    const req = makeRequest('POST', '/_api/deploy', {
+      token: 'deploy-token',
+      body: {
+        name: 'greeter',
+        type: 'normal',
+        schema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', default: 'World' },
+          },
+        },
+        execute: 'return "Hello, " + input.name + "!"',
+      },
+    })
+
+    await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+
+    const code = await kv.getCode('greeter')
+    expect(code).toBeTruthy()
+    expect(code).toContain('export default')
+    expect(code).toContain('async fetch(request)')
+  })
+
+  it('模式 B: schema 存入 KV meta', async () => {
+    const schema = {
+      type: 'object' as const,
+      properties: {
+        from: { type: 'string', description: 'Source currency' },
+        to: { type: 'string', description: 'Target currency' },
+        amount: { type: 'number', description: 'Amount', default: 1 },
+      },
+      required: ['from', 'to'],
+    }
+
+    const req = makeRequest('POST', '/_api/deploy', {
+      token: 'deploy-token',
+      body: {
+        name: 'currency',
+        type: 'persistent',
+        description: 'Currency converter',
+        tags: ['finance'],
+        schema,
+        execute: 'return JSON.stringify({ from: input.from, to: input.to, amount: input.amount })',
+      },
+    })
+
+    await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+
+    const meta = await kv.getMeta('currency')
+    expect(meta?.schema).toBeDefined()
+    expect(meta?.schema?.properties.from.type).toBe('string')
+    expect(meta?.schema?.required).toContain('from')
+    expect(meta?.schema?.required).toContain('to')
+  })
+
+  it('模式 B + A 同时提供 → 400 错误', async () => {
+    const req = makeRequest('POST', '/_api/deploy', {
+      token: 'deploy-token',
+      body: {
+        name: 'bad',
+        type: 'normal',
+        code: 'export default { fetch() { return new Response("hi") } }',
+        schema: { properties: {} },
+        execute: 'return "hello"',
+      },
+    })
+
+    const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+    expect(resp.status).toBe(400)
+    const body = await resp.json() as { error: string }
+    expect(body.error).toContain('Cannot specify both code and schema/execute')
+  })
+
+  it('code 和 execute 都不提供 → 400 错误', async () => {
+    const req = makeRequest('POST', '/_api/deploy', {
+      token: 'deploy-token',
+      body: {
+        name: 'bad',
+        type: 'normal',
+      },
+    })
+
+    const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
+    expect(resp.status).toBe(400)
+    const body = await resp.json() as { error: string }
+    expect(body.error).toContain('Must specify either code or schema+execute')
+  })
 })

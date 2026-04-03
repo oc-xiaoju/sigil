@@ -1,5 +1,7 @@
 // KV key prefixes and data types
 
+import type { InputSchema } from './codegen.js'
+
 export interface KvCodeValue {
   code: string
 }
@@ -12,6 +14,7 @@ export interface KvMetaValue {
   description?: string
   tags?: string[]
   examples?: string[]
+  schema?: InputSchema    // 新增：模式 B deploy 时存储，find 模式返回
 }
 
 export interface KvLruValue {
