@@ -1,36 +1,30 @@
-import { WorkerPool, type CfApi } from './backend/worker-pool.js'
+import { WorkerPool } from './backend/worker-pool.js'
 import { AuthModule } from './auth.js'
 import { KvStore } from './kv.js'
 import { handleRequest } from './router.js'
-import { CONFIG } from './config.js'
+import { createCfApi } from './cf-api.js'
 
 export interface Env {
   SIGIL_KV: KVNamespace
-}
-
-const defaultCfApi: CfApi = {
-  async deployWorker(name: string, _code: string): Promise<void> {
-    // Production: use CF API to deploy
-    console.log(`[sigil] deploy worker: ${name}`)
-  },
-  async deleteWorker(name: string): Promise<void> {
-    console.log(`[sigil] delete worker: ${name}`)
-  },
-  getWorkerSubdomain(name: string): string {
-    return `${name}${CONFIG.SUBDOMAIN_SUFFIX}`
-  },
-  async invoke(_workerName: string, request: Request): Promise<Response> {
-    // Production: fetch from worker subdomain
-    return new Response('Not implemented', { status: 501 })
-  },
+  CF_API_TOKEN: string  // Worker Secret
+  CF_ACCOUNT_ID: string // Worker Secret
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const kv = new KvStore(env.SIGIL_KV)
-    const backend = new WorkerPool(env.SIGIL_KV, defaultCfApi)
+    const cfApi = createCfApi(env.CF_ACCOUNT_ID, env.CF_API_TOKEN)
+    const backend = new WorkerPool(env.SIGIL_KV, cfApi)
     const auth = new AuthModule(kv)
 
-    return handleRequest(request, { SIGIL_KV: env.SIGIL_KV, backend, auth, kv })
+    try {
+      return await handleRequest(request, { SIGIL_KV: env.SIGIL_KV, backend, auth, kv })
+    } catch (e) {
+      console.error('[sigil] unhandled error:', e)
+      return new Response(JSON.stringify({ error: 'Internal server error' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
   },
 }
