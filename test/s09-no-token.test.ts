@@ -24,7 +24,6 @@ describe('S9: 无 token 拒绝', () => {
     const req = makeRequest('POST', '/_api/deploy', {
       // No token
       body: {
-        agent: 'xiaoju',
         name: 'ping',
         code: '// ping',
         type: 'normal',
@@ -39,7 +38,6 @@ describe('S9: 无 token 拒绝', () => {
     const req = makeRequest('POST', '/_api/deploy', {
       token: 'wrong-token',
       body: {
-        agent: 'xiaoju',
         name: 'ping',
         code: '// ping',
         type: 'normal',
@@ -52,7 +50,7 @@ describe('S9: 无 token 拒绝', () => {
 
   it('should return 401 on DELETE without token', async () => {
     const req = makeRequest('DELETE', '/_api/remove', {
-      body: { capability: 'xiaoju--ping' },
+      body: { capability: 'ping' },
     })
 
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
@@ -62,7 +60,6 @@ describe('S9: 无 token 拒绝', () => {
   it('should return error message in body', async () => {
     const req = makeRequest('POST', '/_api/deploy', {
       body: {
-        agent: 'xiaoju',
         name: 'ping',
         code: '// ping',
         type: 'normal',

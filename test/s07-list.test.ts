@@ -19,50 +19,39 @@ describe('S7: 列出能力', () => {
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 
-    await auth.registerAgent('xiaoju', 'token-xiaoju')
-    await auth.registerAgent('xiaomooo', 'token-xiaomooo')
+    await auth.setToken('deploy-token')
 
-    // Deploy 2 for xiaoju (keep total <= MAX_SLOTS=3 to avoid eviction)
-    for (const name of ['ping', 'echo']) {
+    // Deploy some capabilities (keep <= MAX_SLOTS=3 to avoid eviction)
+    for (const name of ['ping', 'echo', 'hello']) {
       await pool.deploy({
-        agent: 'xiaoju',
         name,
         code: `// ${name}`,
         type: 'normal',
       })
     }
-
-    // Deploy 1 for xiaomooo (total = 3, exactly fills slots)
-    await pool.deploy({
-      agent: 'xiaomooo',
-      name: 'hello',
-      code: '// hello',
-      type: 'normal',
-    })
   })
 
-  it('should return only xiaoju capabilities when filtered', async () => {
-    const req = makeRequest('GET', '/_api/list?agent=xiaoju', {
-      token: 'token-xiaoju',
+  it('should return all capabilities', async () => {
+    const req = makeRequest('GET', '/_api/list', {
+      token: 'deploy-token',
     })
 
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     expect(resp.status).toBe(200)
 
     const body = await resp.json() as { capabilities: Array<{ capability: string }> }
-    expect(body.capabilities).toHaveLength(2)
+    expect(body.capabilities).toHaveLength(3)
 
     const names = body.capabilities.map(c => c.capability)
-    expect(names).toContain('xiaoju--ping')
-    expect(names).toContain('xiaoju--echo')
-    expect(names).not.toContain('xiaomooo--hello')
+    expect(names).toContain('ping')
+    expect(names).toContain('echo')
+    expect(names).toContain('hello')
   })
 
   it('should include capability metadata in response', async () => {
-    const caps = await pool.list('xiaoju')
-    expect(caps.length).toBe(2)
+    const caps = await pool.list()
+    expect(caps.length).toBe(3)
     for (const cap of caps) {
-      expect(cap.agent).toBe('xiaoju')
       expect(cap.type).toBe('normal')
       expect(cap.deployed).toBe(true)
     }

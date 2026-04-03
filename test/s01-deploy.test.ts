@@ -19,15 +19,14 @@ describe('S1: 部署能力', () => {
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 
-    // Register agent
-    await auth.registerAgent('xiaoju', 'token-xiaoju')
+    // Set unified deploy token
+    await auth.setToken('deploy-token')
   })
 
   it('should deploy a capability via API', async () => {
     const req = makeRequest('POST', '/_api/deploy', {
-      token: 'token-xiaoju',
+      token: 'deploy-token',
       body: {
-        agent: 'xiaoju',
         name: 'ping',
         code: "export default { fetch() { return new Response('pong') } }",
         type: 'normal',
@@ -42,43 +41,39 @@ describe('S1: 部署能力', () => {
       url: string
       cold_start: boolean
     }
-    expect(body.capability).toBe('xiaoju--ping')
-    expect(body.url).toBe('https://sigil.shazhou.workers.dev/xiaoju/ping')
+    expect(body.capability).toBe('ping')
+    expect(body.url).toBe('https://sigil.shazhou.workers.dev/run/ping')
     expect(body.cold_start).toBe(false)
   })
 
   it('should call CfApi.deployWorker', async () => {
     await pool.deploy({
-      agent: 'xiaoju',
       name: 'ping',
       code: "export default { fetch() { return new Response('pong') } }",
       type: 'normal',
     })
 
-    expect(mockCf.deployCalls()).toContain('s-xiaoju-ping')
+    expect(mockCf.deployCalls()).toContain('s-ping')
   })
 
   it('should write KV entries (code, meta, lru, route)', async () => {
     await pool.deploy({
-      agent: 'xiaoju',
       name: 'ping',
       code: "export default { fetch() { return new Response('pong') } }",
       type: 'normal',
     })
 
-    const code = await kv.getCode('xiaoju--ping')
+    const code = await kv.getCode('ping')
     expect(code).toBeTruthy()
 
-    const meta = await kv.getMeta('xiaoju--ping')
-    expect(meta?.agent).toBe('xiaoju')
-    expect(meta?.name).toBe('ping')
+    const meta = await kv.getMeta('ping')
     expect(meta?.type).toBe('normal')
 
-    const lru = await kv.getLru('xiaoju--ping')
+    const lru = await kv.getLru('ping')
     expect(lru?.deployed).toBe(true)
     expect(lru?.access_count).toBe(0)
 
-    const route = await kv.getRoute('xiaoju--ping')
-    expect(route?.worker_name).toBe('s-xiaoju-ping')
+    const route = await kv.getRoute('ping')
+    expect(route?.worker_name).toBe('s-ping')
   })
 })

@@ -36,23 +36,22 @@ export class WorkerPool implements SigilBackend {
   }
 
   private getWorkerName(capability: string): string {
-    return `${this.config.WORKER_PREFIX}${capability.replace('--', '-')}`
+    return `${this.config.WORKER_PREFIX}${capability}`
   }
 
   async deploy(params: DeployParams): Promise<DeployResult> {
-    const { agent, name, code, type, ttl, bindings } = params
+    const { name, code, type, ttl, bindings } = params
 
     // Determine capability name
-    let capabilityName: string
+    let capability: string
     if (name === null) {
       // Generate ephemeral name: t-{6hex}
       const hash = await this.generateHash(code + Date.now())
-      capabilityName = `t-${hash}`
+      capability = `t-${hash}`
     } else {
-      capabilityName = name
+      capability = name
     }
 
-    const capability = `${agent}--${capabilityName}`
     const workerName = this.getWorkerName(capability)
     const now = Date.now()
 
@@ -91,8 +90,6 @@ export class WorkerPool implements SigilBackend {
       ttl,
       created_at: now,
       bindings,
-      agent,
-      name: capabilityName,
     })
     await this.kv.setLru(capability, {
       last_access: now,
@@ -104,7 +101,7 @@ export class WorkerPool implements SigilBackend {
       subdomain,
     })
 
-    const url = `${this.config.GATEWAY_URL}/${agent}/${capabilityName}`
+    const url = `${this.config.GATEWAY_URL}/run/${capability}`
     const result: DeployResult = {
       capability,
       url,
@@ -287,9 +284,8 @@ export class WorkerPool implements SigilBackend {
     await this.kv.deleteRoute(capabilityName)
   }
 
-  async list(agent?: string): Promise<Capability[]> {
-    const prefix = agent ? `${agent}--` : undefined
-    const caps = await this.kv.listCapabilities(prefix)
+  async list(): Promise<Capability[]> {
+    const caps = await this.kv.listCapabilities()
     const result: Capability[] = []
 
     for (const cap of caps) {
@@ -299,8 +295,6 @@ export class WorkerPool implements SigilBackend {
 
       const capability: Capability = {
         capability: cap,
-        agent: meta.agent,
-        name: meta.name,
         type: meta.type,
         deployed: lru.deployed,
         last_access: lru.last_access,
@@ -326,8 +320,6 @@ export class WorkerPool implements SigilBackend {
 
     const capability: Capability = {
       capability: capabilityName,
-      agent: meta.agent,
-      name: meta.name,
       type: meta.type,
       deployed: lru.deployed,
       last_access: lru.last_access,
@@ -346,13 +338,10 @@ export class WorkerPool implements SigilBackend {
   async status(): Promise<BackendStatus> {
     const caps = await this.kv.listCapabilities()
     let usedSlots = 0
-    const agentSet = new Set<string>()
 
     for (const cap of caps) {
       const lru = await this.kv.getLru(cap)
-      const meta = await this.kv.getMeta(cap)
       if (lru?.deployed) usedSlots++
-      if (meta?.agent) agentSet.add(meta.agent)
     }
 
     const evictionCount = await this.kv.getEvictionCount()
@@ -361,7 +350,6 @@ export class WorkerPool implements SigilBackend {
       backend: 'worker-pool',
       total_slots: this.config.MAX_SLOTS,
       used_slots: Math.min(usedSlots, this.config.MAX_SLOTS),
-      agents: agentSet.size,
       lru_enabled: true,
       eviction_count: evictionCount,
     }

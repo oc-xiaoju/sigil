@@ -18,14 +18,12 @@ describe('S11: 并发换入去重', () => {
     kv = new KvStore(mockKv)
 
     // Simulate evicted capability: code in KV but not deployed
-    await kv.setCode('xiaoju--ping', "export default { fetch() { return new Response('pong') } }")
-    await kv.setMeta('xiaoju--ping', {
+    await kv.setCode('ping', "export default { fetch() { return new Response('pong') } }")
+    await kv.setMeta('ping', {
       type: 'normal',
       created_at: Date.now() - 10000,
-      agent: 'xiaoju',
-      name: 'ping',
     })
-    await kv.setLru('xiaoju--ping', {
+    await kv.setLru('ping', {
       last_access: Date.now() - 10000,
       access_count: 0,
       deployed: false,
@@ -33,13 +31,13 @@ describe('S11: 并发换入去重', () => {
   })
 
   it('should call deployWorker only once for concurrent page-ins', async () => {
-    const req1 = new Request('https://sigil.shazhou.workers.dev/xiaoju/ping')
-    const req2 = new Request('https://sigil.shazhou.workers.dev/xiaoju/ping')
+    const req1 = new Request('https://sigil.shazhou.workers.dev/run/ping')
+    const req2 = new Request('https://sigil.shazhou.workers.dev/run/ping')
 
     // Fire concurrently
     const [resp1, resp2] = await Promise.all([
-      pool.invoke('xiaoju--ping', req1),
-      pool.invoke('xiaoju--ping', req2),
+      pool.invoke('ping', req1),
+      pool.invoke('ping', req2),
     ])
 
     expect(resp1.status).toBe(200)
@@ -47,6 +45,6 @@ describe('S11: 并发换入去重', () => {
 
     // Should only deploy once
     const deployCalls = mockCf.deployCalls()
-    expect(deployCalls.filter(n => n === 's-xiaoju-ping')).toHaveLength(1)
+    expect(deployCalls.filter(n => n === 's-ping')).toHaveLength(1)
   })
 })

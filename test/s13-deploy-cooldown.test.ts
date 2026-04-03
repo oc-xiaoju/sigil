@@ -19,15 +19,14 @@ describe('S13: deploy_cooldown', () => {
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 
-    await auth.registerAgent('xiaoju', 'token-xiaoju')
+    await auth.setToken('deploy-token')
   })
 
   it('should reject rapid second deploy with 429', async () => {
     // First deploy
     const req1 = makeRequest('POST', '/_api/deploy', {
-      token: 'token-xiaoju',
+      token: 'deploy-token',
       body: {
-        agent: 'xiaoju',
         name: 'ping',
         code: '// ping',
         type: 'normal',
@@ -38,9 +37,8 @@ describe('S13: deploy_cooldown', () => {
 
     // Immediate second deploy (< 5s cooldown)
     const req2 = makeRequest('POST', '/_api/deploy', {
-      token: 'token-xiaoju',
+      token: 'deploy-token',
       body: {
-        agent: 'xiaoju',
         name: 'ping2',
         code: '// ping2',
         type: 'normal',
@@ -53,15 +51,15 @@ describe('S13: deploy_cooldown', () => {
   it('should include retry_after in 429 response', async () => {
     // First deploy
     const req1 = makeRequest('POST', '/_api/deploy', {
-      token: 'token-xiaoju',
-      body: { agent: 'xiaoju', name: 'ping', code: '// ping', type: 'normal' },
+      token: 'deploy-token',
+      body: { name: 'ping', code: '// ping', type: 'normal' },
     })
     await handleRequest(req1, { SIGIL_KV: mockKv, backend: pool, auth, kv })
 
     // Immediate second
     const req2 = makeRequest('POST', '/_api/deploy', {
-      token: 'token-xiaoju',
-      body: { agent: 'xiaoju', name: 'ping2', code: '// ping2', type: 'normal' },
+      token: 'deploy-token',
+      body: { name: 'ping2', code: '// ping2', type: 'normal' },
     })
     const resp2 = await handleRequest(req2, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     const body = await resp2.json() as { error: string; retry_after: number }
@@ -71,15 +69,12 @@ describe('S13: deploy_cooldown', () => {
   })
 
   it('should allow deploy after cooldown expires', async () => {
-    // Manually set cooldown as already expired
-    await kv.setAuth('xiaoju', {
-      token: 'token-xiaoju',
-      deploy_cooldown_until: Date.now() - 1000,  // already past
-    })
+    // Manually set last deploy time as already expired
+    await kv.setLastDeployTime(Date.now() - 10000)  // 10s ago, past 5s cooldown
 
     const req = makeRequest('POST', '/_api/deploy', {
-      token: 'token-xiaoju',
-      body: { agent: 'xiaoju', name: 'ping', code: '// ping', type: 'normal' },
+      token: 'deploy-token',
+      body: { name: 'ping', code: '// ping', type: 'normal' },
     })
 
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })

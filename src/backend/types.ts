@@ -1,5 +1,4 @@
 export interface DeployParams {
-  agent: string
   name: string | null       // null = 自动生成 t-{hash}
   code: string
   type: 'persistent' | 'normal' | 'ephemeral'
@@ -8,7 +7,7 @@ export interface DeployParams {
 }
 
 export interface DeployResult {
-  capability: string        // xiaoju--ping
+  capability: string        // 直接就是 name，如 "ping"
   url: string
   expires_at?: string
   cold_start: boolean
@@ -16,9 +15,7 @@ export interface DeployResult {
 }
 
 export interface Capability {
-  capability: string
-  agent: string
-  name: string
+  capability: string        // 直接就是 name，如 "ping"
   type: 'persistent' | 'normal' | 'ephemeral'
   deployed: boolean
   last_access: number
@@ -32,7 +29,6 @@ export interface BackendStatus {
   backend: 'worker-pool' | 'platform'
   total_slots: number
   used_slots: number
-  agents: number
   lru_enabled: boolean
   eviction_count: number
 }
@@ -41,7 +37,7 @@ export interface SigilBackend {
   deploy(params: DeployParams): Promise<DeployResult>
   invoke(name: string, request: Request): Promise<Response>
   remove(name: string): Promise<void>
-  list(agent?: string): Promise<Capability[]>
+  list(): Promise<Capability[]>
   inspect(name: string): Promise<Capability | null>
   status(): Promise<BackendStatus>
 }

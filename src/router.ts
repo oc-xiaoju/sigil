@@ -42,12 +42,11 @@ export async function handleRequest(request: Request, env: RouterEnv): Promise<R
     return handleInspect(capability, env)
   }
 
-  // GET /{agent}/{capability} — invoke
-  const invokeMatch = path.match(/^\/([^/]+)\/([^/]+)$/)
-  if (invokeMatch) {
-    const agent = invokeMatch[1]!
-    const cap = invokeMatch[2]!
-    return handleInvoke(agent, cap, request, env)
+  // GET /run/{capability} — invoke (no auth required)
+  const runMatch = path.match(/^\/run\/([^/]+)$/)
+  if (runMatch) {
+    const capability = runMatch[1]!
+    return handleInvoke(capability, request, env)
   }
 
   return jsonError(404, 'Not found')
@@ -61,10 +60,9 @@ async function handleHealth(env: RouterEnv): Promise<Response> {
 async function handleDeploy(request: Request, env: RouterEnv): Promise<Response> {
   try {
     const authHeader = request.headers.get('Authorization')
-    const agent = await env.auth.validateToken(authHeader)
+    await env.auth.validateToken(authHeader)
 
     const body = await request.json() as {
-      agent: string
       name: string | null
       code: string
       type: 'persistent' | 'normal' | 'ephemeral'
@@ -72,14 +70,10 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
       bindings?: string[]
     }
 
-    // Check agent isolation
-    env.auth.checkAgentAccess(agent, body.agent)
-
     // Check deploy cooldown
-    await env.auth.checkDeployCooldown(agent)
+    await env.auth.checkDeployCooldown()
 
     const result = await env.backend.deploy({
-      agent: body.agent,
       name: body.name,
       code: body.code,
       type: body.type,
@@ -88,7 +82,7 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
     })
 
     // Set cooldown after successful deploy
-    await env.auth.setDeployCooldown(agent)
+    await env.auth.setDeployCooldown()
 
     return jsonOk(result, 201)
   } catch (e) {
@@ -105,16 +99,10 @@ async function handleDeploy(request: Request, env: RouterEnv): Promise<Response>
 async function handleRemove(request: Request, env: RouterEnv): Promise<Response> {
   try {
     const authHeader = request.headers.get('Authorization')
-    const agent = await env.auth.validateToken(authHeader)
+    await env.auth.validateToken(authHeader)
 
     const body = await request.json() as { capability: string }
     const capability = body.capability
-
-    // Check agent owns this capability
-    const agentPrefix = `${agent}--`
-    if (!capability.startsWith(agentPrefix)) {
-      return jsonError(403, `Agent ${agent} cannot remove ${capability}`)
-    }
 
     await env.backend.remove(capability)
     return jsonOk({ removed: capability })
@@ -129,16 +117,9 @@ async function handleRemove(request: Request, env: RouterEnv): Promise<Response>
 async function handleList(request: Request, env: RouterEnv): Promise<Response> {
   try {
     const authHeader = request.headers.get('Authorization')
-    const agent = await env.auth.validateToken(authHeader)
-    const url = new URL(request.url)
-    const filterAgent = url.searchParams.get('agent') ?? undefined
+    await env.auth.validateToken(authHeader)
 
-    // Agent can only list their own capabilities
-    if (filterAgent && filterAgent !== agent) {
-      return jsonError(403, `Agent ${agent} cannot list ${filterAgent}'s capabilities`)
-    }
-
-    const list = await env.backend.list(filterAgent ?? agent)
+    const list = await env.backend.list()
     return jsonOk({ capabilities: list })
   } catch (e) {
     if (e instanceof AuthError) {
@@ -157,12 +138,10 @@ async function handleInspect(capability: string, env: RouterEnv): Promise<Respon
 }
 
 async function handleInvoke(
-  agent: string,
-  capName: string,
+  capability: string,
   request: Request,
   env: RouterEnv,
 ): Promise<Response> {
-  const capability = `${agent}--${capName}`
   try {
     return await env.backend.invoke(capability, request)
   } catch (e) {

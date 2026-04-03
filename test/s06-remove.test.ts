@@ -19,11 +19,10 @@ describe('S6: 删除能力', () => {
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 
-    await auth.registerAgent('xiaoju', 'token-xiaoju')
+    await auth.setToken('deploy-token')
 
     // Deploy first
     await pool.deploy({
-      agent: 'xiaoju',
       name: 'ping',
       code: "export default { fetch() { return new Response('pong') } }",
       type: 'normal',
@@ -33,32 +32,32 @@ describe('S6: 删除能力', () => {
 
   it('should call CfApi.deleteWorker', async () => {
     const req = makeRequest('DELETE', '/_api/remove', {
-      token: 'token-xiaoju',
-      body: { capability: 'xiaoju--ping' },
+      token: 'deploy-token',
+      body: { capability: 'ping' },
     })
 
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     expect(resp.status).toBe(200)
-    expect(mockCf.deleteCalls()).toContain('s-xiaoju-ping')
+    expect(mockCf.deleteCalls()).toContain('s-ping')
   })
 
   it('should clear all KV entries', async () => {
-    await pool.remove('xiaoju--ping')
+    await pool.remove('ping')
 
-    expect(await kv.getCode('xiaoju--ping')).toBeNull()
-    expect(await kv.getMeta('xiaoju--ping')).toBeNull()
-    expect(await kv.getLru('xiaoju--ping')).toBeNull()
-    expect(await kv.getRoute('xiaoju--ping')).toBeNull()
+    expect(await kv.getCode('ping')).toBeNull()
+    expect(await kv.getMeta('ping')).toBeNull()
+    expect(await kv.getLru('ping')).toBeNull()
+    expect(await kv.getRoute('ping')).toBeNull()
   })
 
   it('should return removed capability in response', async () => {
     const req = makeRequest('DELETE', '/_api/remove', {
-      token: 'token-xiaoju',
-      body: { capability: 'xiaoju--ping' },
+      token: 'deploy-token',
+      body: { capability: 'ping' },
     })
 
     const resp = await handleRequest(req, { SIGIL_KV: mockKv, backend: pool, auth, kv })
     const body = await resp.json() as { removed: string }
-    expect(body.removed).toBe('xiaoju--ping')
+    expect(body.removed).toBe('ping')
   })
 })

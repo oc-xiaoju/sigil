@@ -26,9 +26,9 @@ export class AuthModule {
 
   /**
    * Validate Bearer token from Authorization header.
-   * Returns agent name on success, throws AuthError on failure.
+   * Throws AuthError on failure.
    */
-  async validateToken(authHeader: string | null): Promise<string> {
+  async validateToken(authHeader: string | null): Promise<void> {
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       throw new AuthError(401, 'Missing or invalid Authorization header')
     }
@@ -38,56 +38,38 @@ export class AuthModule {
       throw new AuthError(401, 'Empty token')
     }
 
-    // Scan all agents to find matching token
-    const agents = await this.kv.listAgents()
-    for (const agent of agents) {
-      const auth = await this.kv.getAuth(agent)
-      if (auth?.token === token) {
-        return agent
-      }
-    }
-
-    throw new AuthError(401, 'Invalid token')
-  }
-
-  /**
-   * Check that authenticated agent can operate on target agent's namespace.
-   */
-  checkAgentAccess(authenticatedAgent: string, targetAgent: string): void {
-    if (authenticatedAgent !== targetAgent) {
-      throw new AuthError(403, `Agent ${authenticatedAgent} cannot access ${targetAgent}'s namespace`)
+    const auth = await this.kv.getDeployToken()
+    if (!auth || auth.token !== token) {
+      throw new AuthError(401, 'Invalid token')
     }
   }
 
   /**
-   * Check deploy cooldown for agent. Throws DeployCooldownError if active.
+   * Check global deploy cooldown. Throws DeployCooldownError if active.
    */
-  async checkDeployCooldown(agent: string): Promise<void> {
-    const auth = await this.kv.getAuth(agent)
-    if (!auth) return
+  async checkDeployCooldown(): Promise<void> {
+    const lastDeploy = await this.kv.getLastDeployTime()
+    if (!lastDeploy) return
 
     const now = Date.now()
-    if (auth.deploy_cooldown_until && auth.deploy_cooldown_until > now) {
-      const retry_after = Math.ceil((auth.deploy_cooldown_until - now) / 1000)
+    const cooldownUntil = lastDeploy + this.config.DEPLOY_COOLDOWN_MS
+    if (cooldownUntil > now) {
+      const retry_after = Math.ceil((cooldownUntil - now) / 1000)
       throw new DeployCooldownError(retry_after)
     }
   }
 
   /**
-   * Set deploy cooldown for agent.
+   * Set global deploy cooldown timestamp.
    */
-  async setDeployCooldown(agent: string): Promise<void> {
-    const auth = await this.kv.getAuth(agent)
-    if (!auth) return
-
-    const until = Date.now() + this.config.DEPLOY_COOLDOWN_MS
-    await this.kv.setAuth(agent, { ...auth, deploy_cooldown_until: until })
+  async setDeployCooldown(): Promise<void> {
+    await this.kv.setLastDeployTime(Date.now())
   }
 
   /**
-   * Register a new agent with a token (used in tests).
+   * Set deploy token (used in tests).
    */
-  async registerAgent(agent: string, token: string): Promise<void> {
-    await this.kv.setAuth(agent, { token })
+  async setToken(token: string): Promise<void> {
+    await this.kv.setDeployToken({ token })
   }
 }

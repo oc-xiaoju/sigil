@@ -20,9 +20,7 @@ describe('S8: 健康端点', () => {
     auth = new AuthModule(kv)
 
     // Deploy some capabilities
-    await auth.registerAgent('xiaoju', 'token-xiaoju')
     await pool.deploy({
-      agent: 'xiaoju',
       name: 'ping',
       code: '// ping',
       type: 'normal',
@@ -42,7 +40,6 @@ describe('S8: 健康端点', () => {
       backend: string
       total_slots: number
       used_slots: number
-      agents: number
       lru_enabled: boolean
       eviction_count: number
     }
@@ -52,7 +49,6 @@ describe('S8: 健康端点', () => {
     expect(body.total_slots).toBeGreaterThan(0)
     expect(typeof body.used_slots).toBe('number')
     expect(body.used_slots).toBe(1)
-    expect(typeof body.agents).toBe('number')
     expect(body.lru_enabled).toBe(true)
     expect(typeof body.eviction_count).toBe('number')
   })

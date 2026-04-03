@@ -9,8 +9,6 @@ export interface KvMetaValue {
   ttl?: number
   created_at: number
   bindings?: string[]
-  agent: string
-  name: string
 }
 
 export interface KvLruValue {
@@ -94,13 +92,13 @@ export class KvStore {
     await this.kv.delete(`route:${capability}`)
   }
 
-  // auth:{agent}
-  async getAuth(agent: string): Promise<KvAuthValue | null> {
-    return await this.kv.get(`auth:${agent}`, 'json') as KvAuthValue | null
+  // auth:deploy-token — single unified token
+  async getDeployToken(): Promise<KvAuthValue | null> {
+    return await this.kv.get('auth:deploy-token', 'json') as KvAuthValue | null
   }
 
-  async setAuth(agent: string, auth: KvAuthValue): Promise<void> {
-    await this.kv.put(`auth:${agent}`, JSON.stringify(auth))
+  async setDeployToken(auth: KvAuthValue): Promise<void> {
+    await this.kv.put('auth:deploy-token', JSON.stringify(auth))
   }
 
   // stats:eviction_count
@@ -126,16 +124,19 @@ export class KvStore {
     await this.kv.put('stats:page_rate', JSON.stringify(rate))
   }
 
-  // List all capabilities by prefix scanning
-  async listCapabilities(prefix?: string): Promise<string[]> {
-    const kvPrefix = prefix ? `lru:${prefix}` : 'lru:'
-    const list = await this.kv.list({ prefix: kvPrefix })
-    return list.keys.map(k => k.name.slice('lru:'.length))
+  // stats:last_deploy_time — global deploy cooldown
+  async getLastDeployTime(): Promise<number> {
+    const v = await this.kv.get('stats:last_deploy_time', 'json') as { time: number } | null
+    return v?.time ?? 0
   }
 
-  // List all agents (scan auth: keys)
-  async listAgents(): Promise<string[]> {
-    const list = await this.kv.list({ prefix: 'auth:' })
-    return list.keys.map(k => k.name.slice('auth:'.length))
+  async setLastDeployTime(time: number): Promise<void> {
+    await this.kv.put('stats:last_deploy_time', JSON.stringify({ time }))
+  }
+
+  // List all capabilities by prefix scanning
+  async listCapabilities(): Promise<string[]> {
+    const list = await this.kv.list({ prefix: 'lru:' })
+    return list.keys.map(k => k.name.slice('lru:'.length))
   }
 }

@@ -21,15 +21,12 @@ describe('S12: 换页速率限制', () => {
   })
 
   async function setupCapability(name: string): Promise<void> {
-    const capability = `xiaoju--${name}`
-    await kv.setCode(capability, `// ${name}`)
-    await kv.setMeta(capability, {
+    await kv.setCode(name, `// ${name}`)
+    await kv.setMeta(name, {
       type: 'normal',
       created_at: Date.now() - 10000,
-      agent: 'xiaoju',
-      name,
     })
-    await kv.setLru(capability, {
+    await kv.setLru(name, {
       last_access: Date.now() - 10000,
       access_count: 0,
       deployed: false, // evicted
@@ -43,8 +40,8 @@ describe('S12: 换页速率限制', () => {
       const name = `cap${i}`
       await setupCapability(name)
 
-      const req = new Request(`https://sigil.shazhou.workers.dev/xiaoju/${name}`)
-      const resp = await pool.invoke(`xiaoju--${name}`, req)
+      const req = new Request(`https://sigil.shazhou.workers.dev/run/${name}`)
+      const resp = await pool.invoke(name, req)
       results.push(resp.status === 200)
     }
 
@@ -56,17 +53,17 @@ describe('S12: 换页速率限制', () => {
     for (let i = 0; i < CONFIG.PAGE_RATE_LIMIT; i++) {
       const name = `cap${i}`
       await setupCapability(name)
-      const req = new Request(`https://sigil.shazhou.workers.dev/xiaoju/${name}`)
-      await pool.invoke(`xiaoju--${name}`, req)
+      const req = new Request(`https://sigil.shazhou.workers.dev/run/${name}`)
+      await pool.invoke(name, req)
     }
 
     // 11th one should fail
     const name = `cap${CONFIG.PAGE_RATE_LIMIT}`
     await setupCapability(name)
 
-    const req = new Request(`https://sigil.shazhou.workers.dev/xiaoju/${name}`)
+    const req = new Request(`https://sigil.shazhou.workers.dev/run/${name}`)
     try {
-      const resp = await pool.invoke(`xiaoju--${name}`, req)
+      const resp = await pool.invoke(name, req)
       // If it doesn't throw, check status
       expect(resp.status).toBe(503)
     } catch (e) {
@@ -79,16 +76,16 @@ describe('S12: 换页速率限制', () => {
     for (let i = 0; i < CONFIG.PAGE_RATE_LIMIT; i++) {
       const name = `cap${i}`
       await setupCapability(name)
-      const req = new Request(`https://sigil.shazhou.workers.dev/xiaoju/${name}`)
-      await pool.invoke(`xiaoju--${name}`, req)
+      const req = new Request(`https://sigil.shazhou.workers.dev/run/${name}`)
+      await pool.invoke(name, req)
     }
 
     const name = `cap${CONFIG.PAGE_RATE_LIMIT}`
     await setupCapability(name)
-    const req = new Request(`https://sigil.shazhou.workers.dev/xiaoju/${name}`)
+    const req = new Request(`https://sigil.shazhou.workers.dev/run/${name}`)
 
     try {
-      const resp = await pool.invoke(`xiaoju--${name}`, req)
+      const resp = await pool.invoke(name, req)
       if (resp.status === 503) {
         const body = await resp.json() as { error: string; retry_after?: number }
         // retry_after may be 0 for immediate window, just check it exists or we got exception

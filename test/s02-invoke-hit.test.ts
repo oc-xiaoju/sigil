@@ -19,7 +19,6 @@ describe('S2: 调用已部署能力（命中）', () => {
 
     // Deploy first
     await pool.deploy({
-      agent: 'xiaoju',
       name: 'ping',
       code: "export default { fetch() { return new Response('pong') } }",
       type: 'normal',
@@ -28,29 +27,29 @@ describe('S2: 调用已部署能力（命中）', () => {
   })
 
   it('should invoke warm capability', async () => {
-    const req = new Request('https://sigil.shazhou.workers.dev/xiaoju/ping')
-    const resp = await pool.invoke('xiaoju--ping', req)
+    const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
+    const resp = await pool.invoke('ping', req)
     expect(resp.status).toBe(200)
     expect(await resp.text()).toBe('pong')
   })
 
   it('should update lru.last_access on warm hit', async () => {
-    const lruBefore = await kv.getLru('xiaoju--ping')
+    const lruBefore = await kv.getLru('ping')
     const accessBefore = lruBefore!.last_access
 
     await new Promise(r => setTimeout(r, 5))
 
-    const req = new Request('https://sigil.shazhou.workers.dev/xiaoju/ping')
-    await pool.invoke('xiaoju--ping', req)
+    const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
+    await pool.invoke('ping', req)
 
-    const lruAfter = await kv.getLru('xiaoju--ping')
+    const lruAfter = await kv.getLru('ping')
     expect(lruAfter!.last_access).toBeGreaterThan(accessBefore)
     expect(lruAfter!.access_count).toBe(1)
   })
 
   it('should NOT call deployWorker on warm hit', async () => {
-    const req = new Request('https://sigil.shazhou.workers.dev/xiaoju/ping')
-    await pool.invoke('xiaoju--ping', req)
+    const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
+    await pool.invoke('ping', req)
     expect(mockCf.deployCalls()).toHaveLength(0)
   })
 })

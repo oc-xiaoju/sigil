@@ -59,14 +59,6 @@ export class LruScheduler {
   }
 
   /**
-   * Count distinct agents.
-   */
-  async countAgents(): Promise<number> {
-    const agents = await this.kv.listAgents()
-    return agents.length
-  }
-
-  /**
    * Find the best eviction candidate (lowest priority + oldest access).
    * Returns null if no evictable candidate found.
    */
