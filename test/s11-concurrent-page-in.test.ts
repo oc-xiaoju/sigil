@@ -16,7 +16,7 @@ describe('S11: 并发换入去重', () => {
       invokeResponse: () => new Response('pong', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
 
     // Simulate evicted capability: code in KV but not deployed

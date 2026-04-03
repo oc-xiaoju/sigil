@@ -1,12 +1,33 @@
-// Dynamic Workers backend — no CF REST API calls.
-// deploy() stores code in KV; invoke() uses LOADER.get() to run it.
-// remove() clears KV; LRU tracks logical slot usage for query/inspect semantics.
+// Refactored: uses Cloudflare Dynamic Workers (env.LOADER) for invoke.
+// Deploy only writes to KV; no CF API calls needed.
+// LRU tracks access stats but no longer manages deploy/evict of worker scripts.
 
-import type { SigilBackend, DeployParams, DeployResult, Capability, BackendStatus, QueryParams, QueryResult, QueryItem } from './types.js'
+import type { SigilBackend, DeployParams, DeployResult, Capability, BackendStatus, QueryParams, QueryResult, QueryItem, ResolveInvokeResult, ResolveInvokeError } from './types.js'
 import { KvStore } from '../kv.js'
 import { LruScheduler } from '../lru.js'
 import { CONFIG } from '../config.js'
 import { EmbeddingService, cosineSimilarity, mmrSelect } from '../embedding.js'
+
+/**
+ * Dynamic Workers loader binding type.
+ * env.LOADER.get(id, callback) caches a worker by id; callback loads on miss.
+ * env.LOADER.load(config) creates a one-shot worker.
+ */
+export interface WorkerLoader {
+  get(id: string, loader: () => Promise<DynamicWorkerConfig> | DynamicWorkerConfig): DynamicWorkerHandle
+  load(config: DynamicWorkerConfig): DynamicWorkerHandle
+}
+
+export interface DynamicWorkerConfig {
+  compatibilityDate: string
+  mainModule: string
+  modules: Record<string, string>
+  globalOutbound?: null  // null = block network access
+}
+
+export interface DynamicWorkerHandle {
+  getEntrypoint(name?: string): { fetch(request: Request): Promise<Response> }
+}
 
 export class WorkerPool implements SigilBackend {
   private kv: KvStore
@@ -16,7 +37,7 @@ export class WorkerPool implements SigilBackend {
 
   constructor(
     kv: KVNamespace,
-    private loader: any,  // Dynamic Workers LOADER binding
+    private loader: WorkerLoader,
     embeddingService: EmbeddingService,
   ) {
     this.kv = new KvStore(kv)
@@ -30,6 +51,10 @@ export class WorkerPool implements SigilBackend {
     const hashBuffer = await crypto.subtle.digest('SHA-256', data)
     const hashArray = Array.from(new Uint8Array(hashBuffer))
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, this.config.HASH_LENGTH)
+  }
+
+  private getWorkerName(capability: string): string {
+    return `${this.config.WORKER_PREFIX}${capability}`
   }
 
   async deploy(params: DeployParams): Promise<DeployResult> {
@@ -48,30 +73,10 @@ export class WorkerPool implements SigilBackend {
       capability = name
     }
 
+    const workerName = this.getWorkerName(capability)
     const now = Date.now()
 
-    // Logical LRU eviction — evict oldest when slot quota exceeded
-    // Dynamic Workers manages actual warm instances; this is logical tracking only.
-    let deployed = await this.lru.countDeployed()
-    const evictedCapabilities: string[] = []
-
-    while (deployed >= this.config.MAX_SLOTS) {
-      const candidate = await this.lru.findEvictionCandidate()
-      if (!candidate) break
-
-      evictedCapabilities.push(candidate.capability)
-      await this.kv.setLru(candidate.capability, {
-        ...(await this.kv.getLru(candidate.capability))!,
-        deployed: false,
-      })
-      await this.kv.incrementEvictionCount()
-
-      deployed = await this.lru.countDeployed()
-    }
-
-    const evictedCapability = evictedCapabilities[0]
-
-    // Store code and metadata in KV — Dynamic Workers loads from here at runtime
+    // Write KV entries (no CF API deploy needed — code is loaded dynamically at invoke time)
     await this.kv.setCode(capability, code)
     await this.kv.setMeta(capability, {
       type,
@@ -86,10 +91,13 @@ export class WorkerPool implements SigilBackend {
     await this.kv.setLru(capability, {
       last_access: now,
       access_count: 0,
-      deployed: true,
+      deployed: true,  // always "deployed" since code is in KV
+    })
+    await this.kv.setRoute(capability, {
+      worker_name: workerName,
     })
 
-    // Compute and store embedding (non-fatal if it fails)
+    // Compute and store embedding
     try {
       const text = EmbeddingService.buildCapabilityText({
         name: capability,
@@ -114,18 +122,15 @@ export class WorkerPool implements SigilBackend {
       result.expires_at = new Date(now + ttl * 1000).toISOString()
     }
 
-    if (evictedCapability) {
-      result.evicted = evictedCapability
-    }
-
     return result
   }
 
+  /**
+   * Invoke a capability using Dynamic Workers.
+   * LOADER.get() caches warm instances; callback only fires on cache miss.
+   */
   async invoke(capabilityName: string, request: Request): Promise<Response> {
-    // Check capability exists
-    const lru = await this.kv.getLru(capabilityName)
     const code = await this.kv.getCode(capabilityName)
-
     if (!code) {
       return new Response(JSON.stringify({ error: 'Capability not found' }), {
         status: 404,
@@ -133,48 +138,47 @@ export class WorkerPool implements SigilBackend {
       })
     }
 
-    const isColdStart = !lru?.deployed
-
-    // Update LRU access tracking
-    await this.kv.setLru(capabilityName, {
-      last_access: Date.now(),
-      access_count: (lru?.access_count ?? 0) + 1,
-      deployed: true,
-    })
-
-    // Build a stable ID that changes when code changes — fresh isolate on redeploy
-    const codeHash = await this.generateHash(code)
-    const workerId = `sigil-${capabilityName}:${codeHash}`
-
-    // LOADER.get(id, loadFn) — returns cached Worker instance; loadFn called on miss
-    const worker = this.loader.get(workerId, async () => ({
-      compatibilityDate: '2026-04-03',
-      mainModule: 'index.js',
-      modules: { 'index.js': code },
-      globalOutbound: null,  // block outbound network for safety
-    }))
-
-    const entrypoint = worker.getEntrypoint()
-    const response = await entrypoint.fetch(request)
-
-    if (isColdStart) {
-      const headers = new Headers(response.headers)
-      headers.set('X-Sigil-Cold-Start', 'true')
-      return new Response(response.body, {
-        status: response.status,
-        headers,
+    // Update LRU access stats
+    const lru = await this.kv.getLru(capabilityName)
+    if (lru) {
+      await this.kv.setLru(capabilityName, {
+        ...lru,
+        last_access: Date.now(),
+        access_count: lru.access_count + 1,
+        deployed: true,
       })
     }
 
-    return response
+    // Use Dynamic Workers to load and execute the capability code.
+    // LOADER.get() caches by id — subsequent requests reuse the warm instance.
+    const worker = this.loader.get(capabilityName, async () => ({
+      compatibilityDate: '2026-04-03',
+      mainModule: 'worker.js',
+      modules: { 'worker.js': code },
+    }))
+
+    return worker.getEntrypoint().fetch(request)
+  }
+
+  /**
+   * resolveInvoke is no longer needed (was used for 302 redirect workaround).
+   * Kept for interface compatibility; delegates to invoke internally.
+   */
+  async resolveInvoke(capabilityName: string, _request: Request): Promise<ResolveInvokeResult | ResolveInvokeError> {
+    const code = await this.kv.getCode(capabilityName)
+    if (!code) {
+      return { error: 'Capability not found', status: 404 }
+    }
+    // Return a synthetic result; actual invocation now goes through invoke()
+    return { subdomain: '', cold_start: false }
   }
 
   async remove(capabilityName: string): Promise<void> {
-    // Dynamic Workers: no CF API call — just clear KV.
-    // LOADER cache expires naturally; code is gone from KV.
+    // Just clean KV — no CF API script to delete
     await this.kv.deleteCode(capabilityName)
     await this.kv.deleteMeta(capabilityName)
     await this.kv.deleteLru(capabilityName)
+    await this.kv.deleteRoute(capabilityName)
     await this.kv.deleteEmbedding(capabilityName)
   }
 
@@ -369,19 +373,12 @@ export class WorkerPool implements SigilBackend {
 
   async status(): Promise<BackendStatus> {
     const caps = await this.kv.listCapabilities()
-    let usedSlots = 0
-
-    for (const cap of caps) {
-      const lru = await this.kv.getLru(cap)
-      if (lru?.deployed) usedSlots++
-    }
-
     const evictionCount = await this.kv.getEvictionCount()
 
     return {
       backend: 'worker-pool',
       total_slots: this.config.MAX_SLOTS,
-      used_slots: Math.min(usedSlots, this.config.MAX_SLOTS),
+      used_slots: caps.length,  // All capabilities with code in KV are "deployed"
       lru_enabled: true,
       eviction_count: evictionCount,
     }

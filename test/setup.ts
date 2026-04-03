@@ -1,5 +1,5 @@
-// Refactored: MockCfApi replaced with MockLoader (Dynamic Workers LOADER binding).
-// CfApi interface and subdomain helpers removed; invoke now uses LOADER.get().
+// Dynamic Workers backend test setup.
+// MockLoader simulates the CF LOADER binding (worker_loaders).
 
 import { EmbeddingService } from '../src/embedding.js'
 
@@ -93,32 +93,39 @@ export interface MockLoaderGetCall {
  * Mock Dynamic Workers LOADER binding.
  * Records LOADER.get() calls and returns a mock Worker whose
  * getEntrypoint().fetch() delegates to the provided invokeResponse factory.
+ *
+ * NOTE: CF LOADER.get() is synchronous — returns a Worker instance directly.
+ * The mock mirrors this behavior.
  */
 export function createMockLoader(overrides?: {
   invokeResponse?: (workerId: string, request: Request) => Response | Promise<Response>
 }) {
   const getCalls: MockLoaderGetCall[] = []
 
+  // Synchronous LOADER mock — matches the real CF LOADER.get() API
+  const loaderBinding = {
+    get(workerId: string, _loadFn: () => { compatibilityDate: string; mainModule: string; modules: Record<string, string>; globalOutbound: null }) {
+      getCalls.push({ workerId })
+      return {
+        getEntrypoint() {
+          return {
+            async fetch(request: Request): Promise<Response> {
+              if (overrides?.invokeResponse) {
+                return overrides.invokeResponse(workerId, request)
+              }
+              return new Response('mock response', { status: 200 })
+            },
+          }
+        },
+      }
+    },
+  }
+
   return {
     getCalls,
 
-    loader: {
-      async get(workerId: string, _loadFn: () => Promise<{ code: string }>) {
-        getCalls.push({ workerId })
-        return {
-          getEntrypoint() {
-            return {
-              async fetch(request: Request): Promise<Response> {
-                if (overrides?.invokeResponse) {
-                  return overrides.invokeResponse(workerId, request)
-                }
-                return new Response('mock response', { status: 200 })
-              },
-            }
-          },
-        }
-      },
-    },
+    /** The LOADER binding to pass to WorkerPool constructor */
+    loader: loaderBinding,
 
     loaderCalls(): string[] {
       return getCalls.map(c => c.workerId)

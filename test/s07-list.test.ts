@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createMockKv, createMockCfApi, makeRequest, MockEmbeddingService } from './setup.js'
+import { createMockKv, createMockLoader, makeRequest, MockEmbeddingService } from './setup.js'
 import { WorkerPool } from '../src/backend/worker-pool.js'
 import { AuthModule } from '../src/auth.js'
 import { KvStore } from '../src/kv.js'
@@ -7,7 +7,7 @@ import { handleRequest } from '../src/router.js'
 
 describe('S7: 列出能力（已迁移至 query 接口）', () => {
   let mockKv: KVNamespace
-  let mockCf: ReturnType<typeof createMockCfApi>
+  let mockCf: ReturnType<typeof createMockLoader>
   let mockEmbed: MockEmbeddingService
   let pool: WorkerPool
   let auth: AuthModule
@@ -15,9 +15,9 @@ describe('S7: 列出能力（已迁移至 query 接口）', () => {
 
   beforeEach(async () => {
     mockKv = createMockKv()
-    mockCf = createMockCfApi()
+    mockCf = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 

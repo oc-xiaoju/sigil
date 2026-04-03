@@ -18,7 +18,7 @@ describe('S12: 换页速率限制', () => {
       invokeResponse: () => new Response('ok', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
   })
 

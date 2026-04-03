@@ -17,7 +17,7 @@ describe('S9: 无 token 拒绝', () => {
     mockKv = createMockKv()
     mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
   })

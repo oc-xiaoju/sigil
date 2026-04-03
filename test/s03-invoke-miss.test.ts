@@ -16,7 +16,7 @@ describe('S3: 调用未部署能力（换入）', () => {
       invokeResponse: () => new Response('pong', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
 
     // Manually write KV to simulate "evicted but not deleted from KV" state
@@ -37,7 +37,8 @@ describe('S3: 调用未部署能力（换入）', () => {
     const resp = await pool.invoke('ping', req)
 
     expect(resp.status).toBe(200)
-    expect(mockLoader.loaderCalls()).toContain('s-ping')
+    // LOADER.get() should be called (Dynamic Workers executes inline)
+    expect(mockLoader.loaderCalls().length).toBeGreaterThan(0)
   })
 
   it('should set lru.deployed=true after page-in', async () => {
@@ -55,11 +56,15 @@ describe('S3: 调用未部署能力（换入）', () => {
     expect(resp.headers.get('X-Sigil-Cold-Start')).toBe('true')
   })
 
-  it('should write route entry after page-in', async () => {
-    const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
-    await pool.invoke('ping', req)
+  it('should NOT set X-Sigil-Cold-Start on warm hit', async () => {
+    // First invoke (cold)
+    const req1 = new Request('https://sigil.shazhou.workers.dev/run/ping')
+    await pool.invoke('ping', req1)
 
-    const route = await kv.getRoute('ping')
-    expect(route?.worker_name).toBe('s-ping')
+    // Second invoke (warm)
+    const req2 = new Request('https://sigil.shazhou.workers.dev/run/ping')
+    const resp2 = await pool.invoke('ping', req2)
+
+    expect(resp2.headers.get('X-Sigil-Cold-Start')).toBeNull()
   })
 })

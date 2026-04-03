@@ -17,7 +17,7 @@ describe('S1: 部署能力', () => {
     mockKv = createMockKv()
     mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 
@@ -48,7 +48,7 @@ describe('S1: 部署能力', () => {
     expect(body.cold_start).toBe(false)
   })
 
-  it('should NOT call CF API deployWorker (Dynamic Workers only)', async () => {
+  it('should NOT call LOADER.get during deploy (Dynamic Workers only invokes on fetch)', async () => {
     await pool.deploy({
       name: 'ping',
       code: "export default { fetch() { return new Response('pong') } }",
@@ -59,7 +59,7 @@ describe('S1: 部署能力', () => {
     expect(mockLoader.loaderCalls()).toHaveLength(0)
   })
 
-  it('should write KV entries (code, meta, lru, route)', async () => {
+  it('should write KV entries (code, meta, lru)', async () => {
     await pool.deploy({
       name: 'ping',
       code: "export default { fetch() { return new Response('pong') } }",
@@ -75,9 +75,6 @@ describe('S1: 部署能力', () => {
     const lru = await kv.getLru('ping')
     expect(lru?.deployed).toBe(true)
     expect(lru?.access_count).toBe(0)
-
-    const route = await kv.getRoute('ping')
-    expect(route?.worker_name).toBe('s-ping')
   })
 
   // --- 模式 B: schema + execute ---

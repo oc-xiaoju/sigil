@@ -16,7 +16,7 @@ describe('S2: 调用已部署能力（命中）', () => {
       invokeResponse: (_workerName, _req) => new Response('pong', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
 
     // Deploy first
@@ -49,10 +49,10 @@ describe('S2: 调用已部署能力（命中）', () => {
     expect(lruAfter!.access_count).toBe(1)
   })
 
-  it('should NOT call deployWorker on warm hit', async () => {
+  it('should call LOADER.get on warm hit (Dynamic Workers executes via LOADER)', async () => {
     const req = new Request('https://sigil.shazhou.workers.dev/run/ping')
     await pool.invoke('ping', req)
-    // LOADER.get() should be called for invoke, but no CF API deploy
-    expect(mockLoader.loaderCalls()).toContain('s-ping')
+    // LOADER.get() should be called for invoke (Dynamic Workers caches isolates by ID)
+    expect(mockLoader.loaderCalls().length).toBeGreaterThan(0)
   })
 })

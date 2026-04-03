@@ -17,7 +17,7 @@ describe('S4: 配额满时换出', () => {
       invokeResponse: () => new Response('ok', { status: 200 }),
     })
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
   })
 
@@ -37,10 +37,6 @@ describe('S4: 配额满时换出', () => {
         access_count: i,
         deployed: true,
       })
-      await kv.setRoute(cap, {
-        worker_name: `s-${cap}`,
-        subdomain: `s-${cap}.shazhou.workers.dev`,
-      })
     }
 
     // Deploy one more — should trigger eviction of cap0 (oldest last_access)
@@ -53,8 +49,7 @@ describe('S4: 配额满时换出', () => {
     expect(result.capability).toBe('new-cap')
     expect(result.evicted).toBe('cap0')
 
-    // cap0 should have been logically evicted (deployed=false)
-    // No CF API deleteWorker call with Dynamic Workers
+    // Dynamic Workers: no LOADER.get() calls during deploy — only during invoke
     expect(mockLoader.loaderCalls()).toHaveLength(0)
 
     // cap0 lru should be deployed=false
@@ -76,10 +71,6 @@ describe('S4: 配额满时换出', () => {
         last_access: baseTime + i * 100,
         access_count: i,
         deployed: true,
-      })
-      await kv.setRoute(cap, {
-        worker_name: `s-${cap}`,
-        subdomain: `s-${cap}.shazhou.workers.dev`,
       })
     }
 
@@ -110,10 +101,6 @@ describe('S4: 配额满时换出', () => {
         access_count: 10, // high access
         deployed: true,
       })
-      await kv.setRoute(cap, {
-        worker_name: `s-${cap}`,
-        subdomain: `s-${cap}.shazhou.workers.dev`,
-      })
     }
 
     // Add 1 expired ephemeral (more recently accessed but expired)
@@ -127,10 +114,6 @@ describe('S4: 配额满时换出', () => {
       last_access: Date.now() - 100, // recently accessed
       access_count: 100,
       deployed: true,
-    })
-    await kv.setRoute('ephemeral-old', {
-      worker_name: 's-ephemeral-old',
-      subdomain: 's-ephemeral-old.shazhou.workers.dev',
     })
 
     // Deploy one more

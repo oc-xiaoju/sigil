@@ -1,6 +1,7 @@
 // KV key prefixes and data types
 
 import type { InputSchema } from './codegen.js'
+import { CONFIG } from './config.js'
 
 export interface KvCodeValue {
   code: string
@@ -21,6 +22,17 @@ export interface KvLruValue {
   last_access: number
   access_count: number
   deployed: boolean
+}
+
+// slot:{n} — 槽位状态（物理页帧）
+export interface KvSlotValue {
+  capability: string | null
+  status: 'active' | 'free'
+}
+
+// route:{capability} — 存 slot index
+export interface KvRouteValue {
+  slot: number
 }
 
 export interface KvAuthValue {
@@ -45,11 +57,9 @@ export class KvStore {
     const v = await this.kv.get(`code:${capability}`, 'json') as KvCodeValue | null
     return v?.code ?? null
   }
-
   async setCode(capability: string, code: string): Promise<void> {
     await this.kv.put(`code:${capability}`, JSON.stringify({ code }))
   }
-
   async deleteCode(capability: string): Promise<void> {
     await this.kv.delete(`code:${capability}`)
   }
@@ -58,11 +68,9 @@ export class KvStore {
   async getMeta(capability: string): Promise<KvMetaValue | null> {
     return await this.kv.get(`meta:${capability}`, 'json') as KvMetaValue | null
   }
-
   async setMeta(capability: string, meta: KvMetaValue): Promise<void> {
     await this.kv.put(`meta:${capability}`, JSON.stringify(meta))
   }
-
   async deleteMeta(capability: string): Promise<void> {
     await this.kv.delete(`meta:${capability}`)
   }
@@ -71,20 +79,52 @@ export class KvStore {
   async getLru(capability: string): Promise<KvLruValue | null> {
     return await this.kv.get(`lru:${capability}`, 'json') as KvLruValue | null
   }
-
   async setLru(capability: string, lru: KvLruValue): Promise<void> {
     await this.kv.put(`lru:${capability}`, JSON.stringify(lru))
   }
-
   async deleteLru(capability: string): Promise<void> {
     await this.kv.delete(`lru:${capability}`)
   }
 
-  // auth:deploy-token — single unified token
+  // route:{capability} — 存 slot index
+  async getRoute(capability: string): Promise<KvRouteValue | null> {
+    return await this.kv.get(`route:${capability}`, 'json') as KvRouteValue | null
+  }
+  async setRoute(capability: string, route: KvRouteValue): Promise<void> {
+    await this.kv.put(`route:${capability}`, JSON.stringify(route))
+  }
+  async deleteRoute(capability: string): Promise<void> {
+    await this.kv.delete(`route:${capability}`)
+  }
+
+  // slot:{n} — 槽位状态
+  async getSlot(index: number): Promise<KvSlotValue | null> {
+    return await this.kv.get(`slot:${index}`, 'json') as KvSlotValue | null
+  }
+  async setSlot(index: number, value: KvSlotValue): Promise<void> {
+    await this.kv.put(`slot:${index}`, JSON.stringify(value))
+  }
+
+  async findFreeSlot(): Promise<number | null> {
+    for (let i = 0; i < CONFIG.MAX_SLOTS; i++) {
+      const slot = await this.getSlot(i)
+      if (slot?.status === 'free') return i
+    }
+    return null
+  }
+
+  async findSlotByCapability(capability: string): Promise<number | null> {
+    for (let i = 0; i < CONFIG.MAX_SLOTS; i++) {
+      const slot = await this.getSlot(i)
+      if (slot?.capability === capability) return i
+    }
+    return null
+  }
+
+  // auth:deploy-token
   async getDeployToken(): Promise<KvAuthValue | null> {
     return await this.kv.get('auth:deploy-token', 'json') as KvAuthValue | null
   }
-
   async setDeployToken(auth: KvAuthValue): Promise<void> {
     await this.kv.put('auth:deploy-token', JSON.stringify(auth))
   }
@@ -94,7 +134,6 @@ export class KvStore {
     const v = await this.kv.get('stats:eviction_count', 'json') as { count: number } | null
     return v?.count ?? 0
   }
-
   async incrementEvictionCount(): Promise<number> {
     const current = await this.getEvictionCount()
     const next = current + 1
@@ -107,30 +146,26 @@ export class KvStore {
     const v = await this.kv.get('stats:page_rate', 'json') as KvPageRateValue | null
     return v ?? { count: 0, window_start: Date.now() }
   }
-
   async setPageRate(rate: KvPageRateValue): Promise<void> {
     await this.kv.put('stats:page_rate', JSON.stringify(rate))
   }
 
-  // stats:last_deploy_time — global deploy cooldown
+  // stats:last_deploy_time
   async getLastDeployTime(): Promise<number> {
     const v = await this.kv.get('stats:last_deploy_time', 'json') as { time: number } | null
     return v?.time ?? 0
   }
-
   async setLastDeployTime(time: number): Promise<void> {
     await this.kv.put('stats:last_deploy_time', JSON.stringify({ time }))
   }
 
-  // embed:{capability} — capability embedding vector
+  // embed:{capability}
   async getEmbedding(capability: string): Promise<number[] | null> {
     return await this.kv.get(`embed:${capability}`, 'json') as number[] | null
   }
-
   async setEmbedding(capability: string, vector: number[]): Promise<void> {
     await this.kv.put(`embed:${capability}`, JSON.stringify(vector))
   }
-
   async deleteEmbedding(capability: string): Promise<void> {
     await this.kv.delete(`embed:${capability}`)
   }

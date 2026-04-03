@@ -17,7 +17,7 @@ describe('Query API', () => {
     mockKv = createMockKv()
     mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
     kv = new KvStore(mockKv)
     auth = new AuthModule(kv)
 
@@ -112,7 +112,7 @@ describe('Query API', () => {
     // Re-deploy with the new overrides in place
     const mockKv2 = createMockKv()
     const mockLoader2 = createMockLoader()
-    const pool2 = new WorkerPool(mockKv2, mockCf2.cfApi, mockEmbed as any)
+    const pool2 = new WorkerPool(mockKv2, mockCf2.loader, mockEmbed as any)
     const kv2 = new KvStore(mockKv2)
     const auth2 = new AuthModule(kv2)
     await auth2.setToken('deploy-token')
@@ -176,7 +176,7 @@ describe('Query API', () => {
         return mockEmbed.embedQuery(q)
       },
     }
-    const pool2 = new WorkerPool(mockKv, mockLoader.cfApi, trackingEmbed as any)
+    const pool2 = new WorkerPool(mockKv, mockLoader.loader, trackingEmbed as any)
     const result = await pool2.query({})
     expect(embedCalled).toBe(false)
     expect(result.total).toBe(3)

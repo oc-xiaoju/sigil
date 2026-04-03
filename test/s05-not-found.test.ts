@@ -12,7 +12,7 @@ describe('S5: 调用不存在的能力', () => {
     mockKv = createMockKv()
     mockLoader = createMockLoader()
     mockEmbed = new MockEmbeddingService()
-    pool = new WorkerPool(mockKv, mockLoader.cfApi, mockEmbed as any)
+    pool = new WorkerPool(mockKv, mockLoader.loader, mockEmbed as any)
   })
 
   it('should return 404 for nonexistent capability', async () => {
